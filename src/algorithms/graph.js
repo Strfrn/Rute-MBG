@@ -1,10 +1,10 @@
 // Kecepatan rata-rata per jenis jalan (km/jam). Ini asumsi, boleh diubah.
 const SPEED_KMH = {
-  trunk: 50, trunk_link: 40,
-  primary: 40, primary_link: 30,
-  secondary: 35, secondary_link: 30,
-  tertiary: 30, tertiary_link: 25,
-  unclassified: 25, residential: 20,
+  trunk: 40, trunk_link: 40,
+  primary: 35, primary_link: 30,
+  secondary: 30, secondary_link: 30,
+  tertiary: 25, tertiary_link: 25,
+  unclassified: 20, residential: 20,
   living_street: 10, service: 15,
 };
 
