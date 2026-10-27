@@ -7,19 +7,31 @@ import { buildGraph } from './algorithms/graph.js';
 import { largestComponent, snapPoint } from './algorithms/snap.js';
 import { buildMatrix } from './algorithms/matrix.js';
 import { bruteForce, naiveRoute, routeCost } from './algorithms/route.js';
-import { routeToCoords } from './algorithms/roadPath.js';
+import { routeToCoords, routeToLegs } from './algorithms/roadPath.js';
 
-const COLORS = { dist: '#0f766e', time: '#c2410c' };
+const LEG_COLORS = [
+  '#2563eb', '#ea580c', '#16a34a', '#7c3aed',
+  '#db2777', '#0891b2', '#ca8a04', '#65a30d',
+];
+
+// Warna perjalanan ke-k. Perjalanan terakhir (pulang ke dapur) abu-abu gelap.
+function legColor(k, total) {
+  if (k === total - 1) return '#334155';
+  if (k < LEG_COLORS.length) return LEG_COLORS[k];
+  return `hsl(${(k * 137.5) % 360} 65% 42%)`; // cadangan kalau sekolahnya banyak
+}
 
 function fmt(key, v) {
   if (key === 'dist') return v >= 1000 ? (v / 1000).toFixed(2) + ' km' : Math.round(v) + ' m';
   return (v / 60).toFixed(1) + ' menit';
 }
 
-function pin(label, kind, active) {
+function pin(label, kind, active, color) {
+  const bg = active ? '#111' : color;
+  const style = bg ? ` style="background:${bg}"` : '';
   return L.divIcon({
     className: '',
-    html: `<div class="pin ${kind}${active ? ' active' : ''}">${label}</div>`,
+    html: `<div class="pin ${kind}${active ? ' active' : ''}"${style}>${label}</div>`,
     iconSize: [30, 30],
     iconAnchor: [15, 15],
   });
@@ -67,7 +79,7 @@ export default function App() {
         matrix,
         route,
         cost: routeCost(matrix, route),
-        line: routeToCoords(g.adj, g.coords, nodes, route, key),
+        legs: routeToLegs(g.adj, g.coords, nodes, route, key),
         naiveCost: routeCost(matrix, naive),
         naiveLine: routeToCoords(g.adj, g.coords, nodes, naive, key),
       };
@@ -80,7 +92,7 @@ export default function App() {
   // Animasi menggambar garis rute
   useEffect(() => {
     if (!current) return;
-    const total = current.line.length;
+    const total = current.legs.flat().length;
     const step = Math.max(1, Math.ceil(total / 120));
     setDrawn(0);
     const id = setInterval(() => {
@@ -100,6 +112,15 @@ export default function App() {
   const { places } = plan;
   const { route, cost, naiveCost, matrix } = current;
   const saved = (((naiveCost - cost) / naiveCost) * 100).toFixed(1);
+
+  // Potong tiap perjalanan sesuai progres animasi, dan beri warna
+  const totalLegs = current.legs.length;
+  let offset = 0;
+  const legParts = current.legs.map((leg, k) => {
+    const visible = Math.max(0, Math.min(leg.length, drawn - offset));
+    offset += leg.length;
+    return { points: leg.slice(0, visible), color: legColor(k, totalLegs) };
+  });
 
   const select = i => {
     setActive(i);
@@ -126,13 +147,13 @@ export default function App() {
         <div className="stats">
           <div className="stat">
             <b>{fmt(objective, cost)}</b>
-            <span>Rute terbaik</span>
+            <span>{objective === 'dist' ? 'Jarak' : 'Waktu'} rute terbaik</span>
           </div>
           <div className="stat">
             <b>{fmt(objective, naiveCost)}</b>
-            <span>Urutan asal</span>
+            <span>{objective === 'dist' ? 'Jarak' : 'Waktu'} urutan asal</span>
           </div>
-                   <div className="stat wide">
+          <div className="stat wide">
             <b>
               Hemat {objective === 'dist' ? 'jarak' : 'waktu'} {saved}%
             </b>
@@ -157,13 +178,13 @@ export default function App() {
           </button>
           {route.slice(1, -1).map((idx, k) => (
             <button key={idx} className={'stop' + (active === idx ? ' active' : '')} onClick={() => select(idx)}>
-              <span className="badge">{k + 1}</span>
+              <span className="badge" style={{ background: legColor(k, totalLegs) }}>{k + 1}</span>
               <span className="name">{places[idx].name}</span>
               <span className="leg">+ {fmt(objective, matrix[route[k]][idx])}</span>
             </button>
           ))}
           <div className="stop" style={{ cursor: 'default' }}>
-            <span className="badge kitchen">D</span>
+            <span className="badge kitchen" style={{ background: legColor(totalLegs - 1, totalLegs) }}>D</span>
             <span className="name">Kembali ke dapur</span>
             <span className="leg">
               + {fmt(objective, matrix[route[route.length - 2]][0])}
@@ -190,8 +211,12 @@ export default function App() {
           />
         )}
 
-        <Polyline positions={current.line.slice(0, drawn)} pathOptions={{ color: '#fff', weight: 9, opacity: 0.9 }} />
-        <Polyline positions={current.line.slice(0, drawn)} pathOptions={{ color: COLORS[objective], weight: 5 }} />
+        {legParts.map((p, k) => (
+          <Polyline key={'c' + k} positions={p.points} pathOptions={{ color: '#fff', weight: 9, opacity: 0.9 }} />
+        ))}
+        {legParts.map((p, k) => (
+          <Polyline key={'l' + k} positions={p.points} pathOptions={{ color: p.color, weight: 5 }} />
+        ))}
 
         {places.map((p, i) => (
           <Marker
@@ -200,7 +225,7 @@ export default function App() {
             icon={
               i === 0
                 ? pin('D', 'kitchen', active === 0)
-                : pin(route.indexOf(i), 'school', active === i)
+                : pin(route.indexOf(i), 'school', active === i, legColor(route.indexOf(i) - 1, totalLegs))
             }
             eventHandlers={{ click: () => setActive(i) }}
           >

@@ -1,16 +1,24 @@
 import { dijkstra, buildPath } from './dijkstra.js';
 
-// route = [0, 3, 1, 2, 0] (nomor tempat), nodes = node jalan tiap tempat
-export function routeToCoords(adj, coords, nodes, route, key) {
-  const line = [];
+// Satu garis untuk tiap perjalanan:
+// dapur -> sekolah 1, sekolah 1 -> sekolah 2, ..., sekolah terakhir -> dapur
+export function routeToLegs(adj, coords, nodes, route, key) {
+  const legs = [];
   for (let i = 0; i < route.length - 1; i++) {
     const from = nodes[route[i]];
     const to = nodes[route[i + 1]];
     const { prev } = dijkstra(adj, from, key, [to]);
-    for (const id of buildPath(prev, to)) {
-      const c = coords.get(id);
-      line.push([c.lat, c.lon]);
-    }
+    legs.push(
+      buildPath(prev, to).map(id => {
+        const c = coords.get(id);
+        return [c.lat, c.lon];
+      })
+    );
   }
-  return line;
+  return legs;
+}
+
+// Versi lama: semua perjalanan disambung jadi satu garis
+export function routeToCoords(adj, coords, nodes, route, key) {
+  return routeToLegs(adj, coords, nodes, route, key).flat();
 }
