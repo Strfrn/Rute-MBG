@@ -1,0 +1,44 @@
+{
+  "kitchen": {
+    "name": "SPPG Cilandak",
+    "lat": -6.313757246014033, 
+    "lng": 106.79554549248644
+  },
+  "schools": [
+    {
+      "id": 1,
+      "name": "SMPN 85 Jakarta",
+      "lat": -6.312432690389074, 
+      "lng": 106.79492629248641,
+      "students": 859
+    },
+    {
+      "id": 2,
+      "name": "SDN 05 Pagi Pondok Labu",
+      "lat": -6.307085,
+      "lng": 106.793217,
+      "students": 300
+    },
+    {
+      "id": 3,
+      "name": "SMKN 41 Jakarta",
+      "lat": -6.31448,
+      "lng": 106.802143,
+      "students": 733
+    },
+    {
+      "id": 4,
+      "name": "SDN Pondok Labu 03 Pagi",
+      "lat": -6.310897,
+      "lng": 106.794595,
+      "students": 732
+    },
+    {
+      "id": 5,
+      "name": "SMPN 37 Jakarta",
+      "lat": -6.302305,
+      "lng": 106.79985,
+      "students": 854
+    }
+  ]
+}
