@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Polyline, Tooltip, useMap } from 'react-leaflet';
+import {
+  MapContainer, TileLayer, Marker, Polyline, Circle, Tooltip, useMap, useMapEvents,
+} from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './App.css';
@@ -8,6 +10,7 @@ import { largestComponent, snapPoint } from './algorithms/snap.js';
 import { buildMatrix } from './algorithms/matrix.js';
 import { bruteForce, naiveRoute, routeCost } from './algorithms/route.js';
 import { routeToCoords, routeToLegs } from './algorithms/roadPath.js';
+import { applyBlockages } from './algorithms/blockage.js';
 
 const LEG_COLORS = [
   '#2563eb', '#ea580c', '#16a34a', '#7c3aed',
@@ -18,7 +21,7 @@ const LEG_COLORS = [
 function legColor(k, total) {
   if (k === total - 1) return '#334155';
   if (k < LEG_COLORS.length) return LEG_COLORS[k];
-  return `hsl(${(k * 137.5) % 360} 65% 42%)`; // cadangan kalau sekolahnya banyak
+  return `hsl(${(k * 137.5) % 360} 65% 42%)`;
 }
 
 function fmt(key, v) {
@@ -37,12 +40,58 @@ function pin(label, kind, active, color) {
   });
 }
 
+// Hitung rute terbaik untuk kondisi blokade tertentu
+function solve(base, blockages) {
+  const { g, places, nodes } = base;
+  const adj = applyBlockages(g.adj, g.coords, blockages);
+  const result = {};
+  let unreachable = [];
+
+  for (const key of ['dist', 'time']) {
+    const full = buildMatrix(adj, nodes, key);
+
+    // Sekolah yang masih bisa dicapai dari dapur dan bisa kembali
+    const idx = places
+      .map((_, i) => i)
+      .filter(i => i === 0 || (full[0][i] < Infinity && full[i][0] < Infinity));
+    const sub = idx.map(i => idx.map(j => full[i][j]));
+
+    const route = bruteForce(sub).map(k => idx[k]);
+    const naive = naiveRoute(idx.length).map(k => idx[k]);
+
+    result[key] = {
+      matrix: full,
+      route,
+      cost: routeCost(full, route),
+      legs: routeToLegs(adj, g.coords, nodes, route, key),
+      naiveCost: routeCost(full, naive),
+      naiveLine: routeToCoords(adj, g.coords, nodes, naive, key),
+    };
+    if (key === 'dist') unreachable = places.map((_, i) => i).filter(i => !idx.includes(i));
+  }
+  return { result, unreachable };
+}
+
 // Membuat peta terbang ke lokasi yang diklik
 function FlyTo({ target }) {
   const map = useMap();
   useEffect(() => {
     if (target) map.flyTo(target, 16, { duration: 0.8 });
   }, [target, map]);
+  return null;
+}
+
+// Menangkap klik di peta saat mode "tambah blokade" aktif
+function ClickHandler({ active, onClick }) {
+  const map = useMap();
+  useMapEvents({
+    click: e => {
+      if (active) onClick(e.latlng);
+    },
+  });
+  useEffect(() => {
+    map.getContainer().style.cursor = active ? 'crosshair' : '';
+  }, [active, map]);
   return null;
 }
 
@@ -54,6 +103,9 @@ export default function App() {
   const [flyTarget, setFlyTarget] = useState(null);
   const [drawn, setDrawn] = useState(0);
   const [replay, setReplay] = useState(0);
+  const [blockages, setBlockages] = useState([]);
+  const [addMode, setAddMode] = useState(false);
+  const [radius, setRadius] = useState(40);
 
   useEffect(() => {
     Promise.all([
@@ -62,30 +114,21 @@ export default function App() {
     ]).then(([data, roads]) => setRaw({ data, roads }));
   }, []);
 
-  const plan = useMemo(() => {
+  // Dihitung sekali: graph, tempat, dan hasil snapping
+  const base = useMemo(() => {
     if (!raw) return null;
-    const { data, roads } = raw;
-    const g = buildGraph(roads);
+    const g = buildGraph(raw.roads);
     const main = largestComponent(g.adj);
-    const places = [data.kitchen, ...data.schools];
+    const places = [raw.data.kitchen, ...raw.data.schools];
     const nodes = places.map(p => snapPoint(p, g.coords, main).nodeId);
-
-    const result = {};
-    for (const key of ['dist', 'time']) {
-      const matrix = buildMatrix(g.adj, nodes, key);
-      const route = bruteForce(matrix);
-      const naive = naiveRoute(places.length);
-      result[key] = {
-        matrix,
-        route,
-        cost: routeCost(matrix, route),
-        legs: routeToLegs(g.adj, g.coords, nodes, route, key),
-        naiveCost: routeCost(matrix, naive),
-        naiveLine: routeToCoords(g.adj, g.coords, nodes, naive, key),
-      };
-    }
-    return { places, result };
+    return { g, places, nodes };
   }, [raw]);
+
+  // Rute tanpa blokade, untuk pembanding
+  const baseline = useMemo(() => (base ? solve(base, []) : null), [base]);
+
+  // Rute dengan blokade, dihitung ulang tiap blokade berubah
+  const plan = useMemo(() => (base ? solve(base, blockages) : null), [base, blockages]);
 
   const current = plan ? plan.result[objective] : null;
 
@@ -109,9 +152,14 @@ export default function App() {
 
   if (!plan) return <p style={{ padding: 20 }}>Menghitung rute...</p>;
 
-  const { places } = plan;
+  const { places } = base;
+  const { unreachable } = plan;
   const { route, cost, naiveCost, matrix } = current;
-  const saved = (((naiveCost - cost) / naiveCost) * 100).toFixed(1);
+  const saved = naiveCost > 0 ? (((naiveCost - cost) / naiveCost) * 100).toFixed(1) : '0.0';
+  const barWidth = naiveCost > 0 ? Math.max(4, (cost / naiveCost) * 100) : 100;
+  const baseCost = baseline.result[objective].cost;
+  const delta = cost - baseCost;
+  const word = objective === 'dist' ? 'jarak' : 'waktu';
 
   // Potong tiap perjalanan sesuai progres animasi, dan beri warna
   const totalLegs = current.legs.length;
@@ -127,68 +175,136 @@ export default function App() {
     setFlyTarget([places[i].lat, places[i].lng]);
   };
 
+  const addBlockage = ll =>
+    setBlockages(list => [
+      ...list,
+      { id: Date.now() + Math.random(), lat: ll.lat, lng: ll.lng, radius },
+    ]);
+  const removeBlockage = id => setBlockages(list => list.filter(b => b.id !== id));
+
   return (
     <div className="layout">
       <aside className="panel">
-        <div>
-          <h1>Rute pengantaran MBG</h1>
-          <p className="sub">Dari {places[0].name} ke {places.length - 1} sekolah</p>
-        </div>
+        <header className="brand">
+          <span className="eyebrow">MBG · Dispatch</span>
+          <h1>Rute pengantaran</h1>
+          <p className="sub">
+            <b>{places[0].name}</b> → {places.length - 1} sekolah
+          </p>
+        </header>
 
-        <div className="toggle">
-          <button className={objective === 'dist' ? 'on' : ''} onClick={() => setObjective('dist')}>
-            Jarak terpendek
-          </button>
-          <button className={objective === 'time' ? 'on' : ''} onClick={() => setObjective('time')}>
-            Waktu tercepat
-          </button>
-        </div>
-
-        <div className="stats">
-          <div className="stat">
-            <b>{fmt(objective, cost)}</b>
-            <span>{objective === 'dist' ? 'Jarak' : 'Waktu'} rute terbaik</span>
-          </div>
-          <div className="stat">
-            <b>{fmt(objective, naiveCost)}</b>
-            <span>{objective === 'dist' ? 'Jarak' : 'Waktu'} urutan asal</span>
-          </div>
-          <div className="stat wide">
-            <b>
-              Hemat {objective === 'dist' ? 'jarak' : 'waktu'} {saved}%
-            </b>
-            <span>
-              {fmt(objective, naiveCost - cost)} lebih {objective === 'dist' ? 'pendek' : 'cepat'} dari urutan asal
-            </span>
-          </div>
-        </div>
-
-        <div className="row">
-          <label>
-            <input type="checkbox" checked={showNaive} onChange={e => setShowNaive(e.target.checked)} />{' '}
-            Tampilkan urutan asal
-          </label>
-          <button onClick={() => setReplay(r => r + 1)}>Putar ulang</button>
-        </div>
-
-        <div className="stops">
-          <button className="stop" onClick={() => select(0)}>
-            <span className="badge kitchen">D</span>
-            <span className="name">{places[0].name}</span>
-          </button>
-          {route.slice(1, -1).map((idx, k) => (
-            <button key={idx} className={'stop' + (active === idx ? ' active' : '')} onClick={() => select(idx)}>
-              <span className="badge" style={{ background: legColor(k, totalLegs) }}>{k + 1}</span>
-              <span className="name">{places[idx].name}</span>
-              <span className="leg">+ {fmt(objective, matrix[route[k]][idx])}</span>
+        <div className="sec">
+          <div className="toggle">
+            <button className={objective === 'dist' ? 'on' : ''} onClick={() => setObjective('dist')}>
+              Jarak terpendek
             </button>
-          ))}
-          <div className="stop" style={{ cursor: 'default' }}>
-            <span className="badge kitchen" style={{ background: legColor(totalLegs - 1, totalLegs) }}>D</span>
-            <span className="name">Kembali ke dapur</span>
-            <span className="leg">
-              + {fmt(objective, matrix[route[route.length - 2]][0])}
+            <button className={objective === 'time' ? 'on' : ''} onClick={() => setObjective('time')}>
+              Waktu tercepat
+            </button>
+          </div>
+        </div>
+
+        <div className="sec">
+          <span className="lbl">{objective === 'dist' ? 'Jarak' : 'Waktu'} rute terbaik</span>
+          <b className="big">{fmt(objective, cost)}</b>
+          <div className="bar" title="Rute terbaik dibanding urutan asal">
+            <i style={{ width: barWidth + '%' }} />
+          </div>
+          <div className="cmp">
+            <span>urutan asal {fmt(objective, naiveCost)}</span>
+            <span className="save">
+              Hemat {word} {saved}%
             </span>
+          </div>
+          <p className="gain">
+            {fmt(objective, naiveCost - cost)} lebih {objective === 'dist' ? 'pendek' : 'cepat'} dari urutan asal
+          </p>
+        </div>
+
+        <div className="hazard">
+          <div className="hz-head">
+            <b>Blokade jalan</b>
+            <span className="count">{blockages.length}</span>
+          </div>
+          <button className={'btn' + (addMode ? ' on' : '')} onClick={() => setAddMode(m => !m)}>
+            {addMode ? 'Selesai menambah' : 'Tambah blokade (klik peta)'}
+          </button>
+          <label className="radius">
+            RADIUS BLOKADE BERIKUTNYA · {radius} M
+            <input
+              type="range" min="15" max="150" step="5" value={radius}
+              onChange={e => setRadius(Number(e.target.value))}
+            />
+          </label>
+
+          {blockages.length === 0 && (
+            <p className="note">Belum ada blokade. Aktifkan tombol di atas, lalu klik di jalan pada peta.</p>
+          )}
+
+          {blockages.map((b, k) => (
+            <div key={b.id} className="hz-item">
+              <span>Blokade {k + 1} · {b.radius} m</span>
+              <button className="small" onClick={() => removeBlockage(b.id)}>Hapus</button>
+            </div>
+          ))}
+          {blockages.length > 1 && (
+            <button className="small" onClick={() => setBlockages([])}>Hapus semua</button>
+          )}
+
+          {blockages.length > 0 && unreachable.length === 0 && (
+            <p className="note impact">
+              {delta > 0.5
+                ? `Dampak: ${word} bertambah ${fmt(objective, delta)} (tanpa blokade ${fmt(objective, baseCost)}).`
+                : 'Blokade ini tidak mengubah rute terbaik.'}
+            </p>
+          )}
+        </div>
+
+        {unreachable.length > 0 && (
+          <div className="warn">
+            <b>Tidak terjangkau:</b> {unreachable.map(i => places[i].name).join(', ')}.
+            Rute dihitung tanpa sekolah itu.
+          </div>
+        )}
+
+        <div className="sec">
+          <div className="row">
+            <label>
+              <input type="checkbox" checked={showNaive} onChange={e => setShowNaive(e.target.checked)} />
+              Tampilkan urutan asal
+            </label>
+            <button className="small" onClick={() => setReplay(r => r + 1)}>Putar ulang</button>
+          </div>
+        </div>
+
+        <div className="sec">
+          <p className="lbl manifest-title">Urutan kunjungan</p>
+          <div className="stops">
+            <button className="stop" onClick={() => select(0)}>
+              <span className="badge kitchen">D</span>
+              <span className="name">{places[0].name}</span>
+            </button>
+            {route.slice(1, -1).map((idx, k) => (
+              <button key={idx} className={'stop' + (active === idx ? ' active' : '')} onClick={() => select(idx)}>
+                <span className="badge" style={{ background: legColor(k, totalLegs) }}>{k + 1}</span>
+                <span className="name">{places[idx].name}</span>
+                <span className="leg">+ {fmt(objective, matrix[route[k]][idx])}</span>
+              </button>
+            ))}
+            <div className="stop" style={{ cursor: 'default' }}>
+              <span className="badge kitchen" style={{ background: legColor(totalLegs - 1, totalLegs) }}>D</span>
+              <span className="name">Kembali ke dapur</span>
+              <span className="leg">
+                + {fmt(objective, matrix[route[route.length - 2]][0])}
+              </span>
+            </div>
+            {unreachable.map(i => (
+              <button key={'u' + i} className="stop" onClick={() => select(i)}>
+                <span className="badge" style={{ background: '#6b7280' }}>×</span>
+                <span className="name">{places[i].name}</span>
+                <span className="leg">tidak terjangkau</span>
+              </button>
+            ))}
           </div>
         </div>
       </aside>
@@ -203,11 +319,12 @@ export default function App() {
           attribution="&copy; OpenStreetMap contributors"
         />
         <FlyTo target={flyTarget} />
+        <ClickHandler active={addMode} onClick={addBlockage} />
 
         {showNaive && (
           <Polyline
             positions={current.naiveLine}
-            pathOptions={{ color: '#888', weight: 3, dashArray: '6 8', opacity: 0.8 }}
+            pathOptions={{ color: '#666', weight: 3, dashArray: '6 8', opacity: 0.8 }}
           />
         )}
 
@@ -218,20 +335,34 @@ export default function App() {
           <Polyline key={'l' + k} positions={p.points} pathOptions={{ color: p.color, weight: 5 }} />
         ))}
 
-        {places.map((p, i) => (
-          <Marker
-            key={i}
-            position={[p.lat, p.lng]}
-            icon={
-              i === 0
-                ? pin('D', 'kitchen', active === 0)
-                : pin(route.indexOf(i), 'school', active === i, legColor(route.indexOf(i) - 1, totalLegs))
-            }
-            eventHandlers={{ click: () => setActive(i) }}
+        {blockages.map((b, k) => (
+          <Circle
+            key={b.id}
+            center={[b.lat, b.lng]}
+            radius={b.radius}
+            pathOptions={{ color: '#dc2626', weight: 3, fillColor: '#dc2626', fillOpacity: 0.25 }}
           >
-            <Tooltip>{p.name}</Tooltip>
-          </Marker>
+            <Tooltip>Blokade {k + 1}</Tooltip>
+          </Circle>
         ))}
+
+        {places.map((p, i) => {
+          const pos = route.indexOf(i);
+          let icon;
+          if (i === 0) icon = pin('D', 'kitchen', active === 0);
+          else if (pos === -1) icon = pin('×', 'school', active === i, '#6b7280');
+          else icon = pin(pos, 'school', active === i, legColor(pos - 1, totalLegs));
+          return (
+            <Marker
+              key={i}
+              position={[p.lat, p.lng]}
+              icon={icon}
+              eventHandlers={{ click: () => setActive(i) }}
+            >
+              <Tooltip>{p.name}</Tooltip>
+            </Marker>
+          );
+        })}
       </MapContainer>
     </div>
   );
