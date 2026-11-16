@@ -64,6 +64,48 @@ export function dijkstra(adj, start, weightKey, targets = []) {
   return { cost, prev };
 }
 
+// Dijkstra yang sama persis, tapi mencatat urutan simpul yang selesai diproses
+// beserta simpul induknya (untuk menggambar garis pencarian).
+// targets = daftar tujuan; pencarian berhenti setelah semua tujuan ditemukan.
+export function dijkstraTrace(adj, start, targets, weightKey) {
+  const cost = new Map([[start, 0]]);
+  const prev = new Map();
+  const done = new Set();
+  const order = [];
+  const parent = []; // parent[i] = induk dari order[i] (null untuk titik awal)
+  const remaining = new Set(targets);
+  const heap = new MinHeap();
+  heap.push([0, start]);
+
+  while (heap.size) {
+    const [c, u] = heap.pop();
+    if (done.has(u)) continue;
+    done.add(u);
+    order.push(u);
+    parent.push(prev.has(u) ? prev.get(u) : null);
+
+    remaining.delete(u);
+    if (targets.length && remaining.size === 0) break;
+
+    for (const e of adj.get(u) || []) {
+      const nc = c + e[weightKey];
+      if (nc < (cost.get(e.to) ?? Infinity)) {
+        cost.set(e.to, nc);
+        prev.set(e.to, u);
+        heap.push([nc, e.to]);
+      }
+    }
+  }
+
+  const results = targets.map(t => ({
+    target: t,
+    found: done.has(t),
+    path: done.has(t) ? buildPath(prev, t) : [],
+    cost: done.has(t) ? cost.get(t) : Infinity,
+  }));
+  return { order, parent, results };
+}
+
 // Susun jalur dari start ke target (daftar node)
 export function buildPath(prev, target) {
   const path = [target];
