@@ -157,3 +157,29 @@
 
 /* Saat mode Dijkstra aktif, peta dibuat abu-abu supaya warna pencarian lebih menonjol */
 .dj-mode .leaflet-tile-pane { filter: grayscale(1) brightness(1.06) contrast(0.92); }
+
+/* ---------- Lokasi (tambah, ubah, hapus) ---------- */
+.loc-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.loc-actions .btn { width: auto; flex: 1 1 140px; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.loc-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.loc-row { display: flex; align-items: center; gap: 8px; }
+.loc-row .badge { cursor: pointer; }
+.loc-name, .loc-num {
+  min-width: 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--well); color: var(--ink); font: inherit; font-size: 13px;
+}
+.loc-name { flex: 1; }
+.loc-num { width: 64px; }
+.loc-name:focus, .loc-num:focus { outline: 1px solid #5b6068; }
+
+/* ---------- A* ---------- */
+.dj-w { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.dj-w input {
+  width: 80px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--well); color: var(--ink); font: inherit; font-size: 13px;
+}
+.dj-compare { display: flex; flex-direction: column; gap: 4px; padding: 10px; border-radius: 8px; background: var(--well); }
+.cmp-row { display: grid; grid-template-columns: 1fr 70px 60px; gap: 8px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.cmp-row span:nth-child(n + 2) { text-align: right; }
+.cmp-row.head { font-size: 11px; color: var(--mute); }

@@ -1,5 +1,5 @@
 // Antrian prioritas sederhana: selalu mengeluarkan item dengan biaya terkecil
-class MinHeap {
+export class MinHeap {
   constructor() { this.a = []; }
   get size() { return this.a.length; }
   push(item) {

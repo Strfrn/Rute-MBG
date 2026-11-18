@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  MapContainer, TileLayer, Marker, Polyline, Circle, Tooltip, useMap, useMapEvents,
+  MapContainer, TileLayer, Marker, Polyline, Tooltip, useMap, useMapEvents,
 } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -10,8 +10,9 @@ import { largestComponent, snapPoint } from './algorithms/snap.js';
 import { buildMatrix } from './algorithms/matrix.js';
 import { bruteForce, naiveRoute, routeCost } from './algorithms/route.js';
 import { routeToCoords, routeToLegs } from './algorithms/roadPath.js';
-import { applyBlockages } from './algorithms/blockage.js';
+import { applyBlockages, makeBlockage } from './algorithms/blockage.js';
 import { dijkstra, dijkstraTrace } from './algorithms/dijkstra.js';
+import { astar, maxSpeed } from './algorithms/astar.js';
 
 const LEG_COLORS = [
   '#2563eb', '#ea580c', '#16a34a', '#7c3aed',
@@ -24,6 +25,9 @@ function legColor(k, total) {
   if (k < LEG_COLORS.length) return LEG_COLORS[k];
   return `hsl(${(k * 137.5) % 360} 65% 42%)`;
 }
+
+const STORE_KEY = 'mbg-data-v1'; // kunci penyimpanan data lokasi di browser
+const MAX_SCHOOLS = 9; // batas brute force
 
 // Warna jalur hasil Dijkstra (dibuat beda dari warna pencarian)
 const DJ_COLORS = [
@@ -106,7 +110,7 @@ function ClickHandler({ active, onClick }) {
 }
 
 // Menggambar hasil pencarian Dijkstra: titik dan garis ke simpul induknya (satu layer kanvas)
-function SearchLayer({ coords, parents, step }) {
+function SearchLayer({ coords, parents, step, color = '#06b6d4' }) {
   const map = useMap();
   const layerRef = useRef(null);
   const rendererRef = useRef(null);
@@ -134,8 +138,6 @@ function SearchLayer({ coords, parents, step }) {
     }
     for (let i = shownRef.current; i < n; i++) {
       const c = coords[i];
-      // Satu warna untuk semua garis dan titik pencarian
-      const color = '#06b6d4';
       const p = parents[i];
       if (p) {
         L.polyline([[p.lat, p.lon], [c.lat, c.lon]], {
@@ -156,7 +158,7 @@ function SearchLayer({ coords, parents, step }) {
       }).addTo(layer);
     }
     shownRef.current = n;
-  }, [step, coords, parents]);
+  }, [step, coords, parents, color]);
 
   return null;
 }
@@ -173,7 +175,9 @@ function FitBounds({ bounds }) {
 }
 
 export default function App() {
-  const [raw, setRaw] = useState(null);
+  const [roads, setRoads] = useState(null);
+  const [data, setData] = useState(null);
+  const [fileData, setFileData] = useState(null);
   const [objective, setObjective] = useState('dist');
   const [showNaive, setShowNaive] = useState(true);
   const [active, setActive] = useState(null);
@@ -181,9 +185,10 @@ export default function App() {
   const [drawn, setDrawn] = useState(0);
   const [replay, setReplay] = useState(0);
   const [blockages, setBlockages] = useState([]);
-  const [addMode, setAddMode] = useState(false);
-  const [radius, setRadius] = useState(40);
-  const [mode, setMode] = useState('normal'); // 'normal' atau 'dijkstra'
+  const [mapMode, setMapMode] = useState('none'); // 'none' | 'blockage' | 'school' | 'kitchen'
+  const [blockNote, setBlockNote] = useState('');
+  const [mode, setMode] = useState('normal'); // 'normal', 'dijkstra', atau 'astar'
+  const [wText, setWText] = useState('1'); // bobot heuristik A*
   const [dijkTargets, setDijkTargets] = useState(null); // null = pakai 3 sekolah pertama pada rute
   const [dijkStep, setDijkStep] = useState(0);
 
@@ -191,18 +196,36 @@ export default function App() {
     Promise.all([
       fetch('/data/data.json').then(r => r.json()),
       fetch('/data/roads.json').then(r => r.json()),
-    ]).then(([data, roads]) => setRaw({ data, roads }));
+    ]).then(([file, roadsJson]) => {
+      let saved = null;
+      try {
+        saved = JSON.parse(localStorage.getItem(STORE_KEY));
+      } catch (e) {}
+      const ok = saved && saved.kitchen && Array.isArray(saved.schools);
+      setFileData(file);
+      setData(ok ? saved : file);
+      setRoads(roadsJson);
+    });
   }, []);
 
-  // Dihitung sekali: graph, tempat, dan hasil snapping
+  // Graph jalan: dihitung sekali
+  const graphBase = useMemo(() => {
+    if (!roads) return null;
+    const g = buildGraph(roads);
+    return { g, main: largestComponent(g.adj) };
+  }, [roads]);
+
+  // Snapping: dihitung ulang hanya kalau koordinat berubah (mengganti nama tidak memicunya)
+  const geoKey = data
+    ? JSON.stringify([data.kitchen.lat, data.kitchen.lng, ...data.schools.flatMap(s => [s.lat, s.lng])])
+    : '';
   const base = useMemo(() => {
-    if (!raw) return null;
-    const g = buildGraph(raw.roads);
-    const main = largestComponent(g.adj);
-    const places = [raw.data.kitchen, ...raw.data.schools];
-    const nodes = places.map(p => snapPoint(p, g.coords, main).nodeId);
-    return { g, places, nodes };
-  }, [raw]);
+    if (!graphBase || !data) return null;
+    const places = [data.kitchen, ...data.schools];
+    const nodes = places.map(p => snapPoint(p, graphBase.g.coords, graphBase.main).nodeId);
+    return { g: graphBase.g, places, nodes };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graphBase, geoKey]);
 
   // Rute tanpa blokade, untuk pembanding
   const baseline = useMemo(() => (base ? solve(base, []) : null), [base]);
@@ -259,10 +282,70 @@ export default function App() {
     };
   }, [mode, base, adjNow, targets, objective]);
 
-  // Animasi pencarian Dijkstra
+  // Bobot heuristik A* (1 sampai 5)
+  const astarW = Math.max(1, Math.min(5, parseFloat(String(wText).replace(',', '.')) || 1));
+
+  // A* untuk tiap tujuan (satu per satu), dibandingkan dengan Dijkstra untuk tujuan yang sama
+  const astarRes = useMemo(() => {
+    if (mode !== 'astar' || !base || !adjNow) return null;
+    const valid = targets.filter(t => t > 0 && t < base.nodes.length);
+    if (!valid.length) return null;
+    const from = base.nodes[0];
+    const toNodes = valid.map(t => base.nodes[t]);
+    const coords = base.g.coords;
+    const co = id => coords.get(id);
+    const vmax = maxSpeed(adjNow) * 1.000001;
+
+    const A = toNodes.map(to => astar(adjNow, coords, from, to, objective, astarW, vmax, true));
+    const D = toNodes.map(to => dijkstraTrace(adjNow, from, [to], objective));
+
+    // Waktu: rata-rata 20 kali, tanpa merekam apa pun
+    const bench = fn => {
+      fn(); // pemanasan
+      const RUNS = 20;
+      const t0 = performance.now();
+      for (let i = 0; i < RUNS; i++) fn();
+      return (performance.now() - t0) / RUNS;
+    };
+    const msA = bench(() => toNodes.forEach(to => astar(adjNow, coords, from, to, objective, astarW, vmax)));
+    const msD = bench(() => toNodes.forEach(to => dijkstra(adjNow, from, objective, [to])));
+
+    let costGap = 0;
+    A.forEach((r, k) => {
+      const d = D[k].results[0].cost;
+      if (isFinite(r.cost) && isFinite(d) && d > 0) costGap = Math.max(costGap, (r.cost - d) / d);
+    });
+
+    const routes = A.map((r, k) => ({
+      place: valid[k],
+      found: r.found,
+      cost: r.cost,
+      latlngs: r.path.map(id => [co(id).lat, co(id).lon]),
+    }));
+    const pts = routes.flatMap(r => r.latlngs);
+    return {
+      ms: msA,
+      routes,
+      bounds: pts.length ? pts : [[base.places[0].lat, base.places[0].lng]],
+      orderCoords: A.flatMap(r => r.order).map(co),
+      parentCoords: A.flatMap(r => r.parent).map(p => (p === null ? null : co(p))),
+      compare: {
+        msA,
+        msD,
+        visitedA: A.reduce((sum, r) => sum + r.visited, 0),
+        visitedD: D.reduce((sum, r) => sum + r.order.length, 0),
+        costGap,
+      },
+    };
+  }, [mode, base, adjNow, targets, objective, astarW]);
+
+  // Hasil yang sedang divisualisasikan (Dijkstra atau A*)
+  const viz = mode === 'astar' ? astarRes : dijk;
+
+  // Animasi pencarian
   useEffect(() => {
-    if (!dijk) return;
-    const total = dijk.orderCoords.length;
+    if (!viz) return;
+    const total = viz.orderCoords.length;
     const step = Math.max(1, Math.ceil(total / 120));
     setDijkStep(0);
     const id = setInterval(() => {
@@ -275,7 +358,7 @@ export default function App() {
       });
     }, 30);
     return () => clearInterval(id);
-  }, [dijk, replay]);
+  }, [viz, replay]);
 
   // Animasi menggambar garis rute
   useEffect(() => {
@@ -297,7 +380,7 @@ export default function App() {
 
   if (!plan) return <p style={{ padding: 20 }}>Menghitung rute...</p>;
 
-  const { places } = base;
+  const places = [data.kitchen, ...data.schools];
   const { unreachable } = plan;
   const { route, cost, naiveCost, matrix } = current;
   const baseCost = baseline.result[objective].cost;
@@ -318,11 +401,20 @@ export default function App() {
     setFlyTarget([places[i].lat, places[i].lng]);
   };
 
-  const addBlockage = ll =>
-    setBlockages(list => [
-      ...list,
-      { id: Date.now() + Math.random(), lat: ll.lat, lng: ll.lng, radius },
-    ]);
+  // Klik di dekat jalan -> pasang palang yang menutup ruas jalan itu
+  const addBlockage = ll => {
+    const b = makeBlockage(base.g.adj, base.g.coords, ll);
+    if (!b) {
+      setBlockNote('Tidak ada jalan yang bisa dilewati di dekat titik itu. Klik tepat di jalan.');
+      return;
+    }
+    if (blockages.some(x => (x.a === b.a && x.b === b.b) || (x.a === b.b && x.b === b.a))) {
+      setBlockNote('Ruas jalan itu sudah diblokir.');
+      return;
+    }
+    setBlockNote('');
+    setBlockages(list => [...list, { id: Date.now() + Math.random(), ...b }]);
+  };
   const toggleTarget = i => {
     if (targets.includes(i)) {
       if (targets.length > 1) setDijkTargets(targets.filter(x => x !== i));
@@ -332,8 +424,68 @@ export default function App() {
   };
   const removeBlockage = id => setBlockages(list => list.filter(b => b.id !== id));
 
+  // ---- CRUD lokasi ----
+  const commit = next => {
+    setData(next);
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify(next));
+    } catch (e) {}
+  };
+  const addSchool = ll => {
+    if (data.schools.length >= MAX_SCHOOLS) {
+      setMapMode('none');
+      return;
+    }
+    const id = data.schools.reduce((m, sc) => Math.max(m, sc.id || 0), 0) + 1;
+    commit({
+      ...data,
+      schools: [...data.schools, { id, name: 'Sekolah baru ' + id, lat: ll.lat, lng: ll.lng, students: 300 }],
+    });
+  };
+  const updateSchool = (i, patch) =>
+    commit({ ...data, schools: data.schools.map((sc, k) => (k === i ? { ...sc, ...patch } : sc)) });
+  const removeSchool = i => {
+    commit({ ...data, schools: data.schools.filter((_, k) => k !== i) });
+    setDijkTargets(null);
+    setActive(null);
+  };
+  const updateKitchen = patch => commit({ ...data, kitchen: { ...data.kitchen, ...patch } });
+  const moveLocation = (i, ll) => {
+    const patch = { lat: ll.lat, lng: ll.lng };
+    if (i === 0) updateKitchen(patch);
+    else updateSchool(i - 1, patch);
+  };
+  const resetData = () => {
+    if (!window.confirm('Kembalikan ke data.json awal? Perubahan yang belum diunduh akan hilang.')) return;
+    try {
+      localStorage.removeItem(STORE_KEY);
+    } catch (e) {}
+    setData(fileData);
+    setDijkTargets(null);
+    setActive(null);
+  };
+  const downloadData = () => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'data.json';
+    a.click();
+  };
+  const onMapClick = ll => {
+    if (mapMode === 'blockage') addBlockage(ll);
+    else if (mapMode === 'school') addSchool(ll);
+    else if (mapMode === 'kitchen') {
+      updateKitchen({ lat: ll.lat, lng: ll.lng });
+      setMapMode('none');
+    }
+  };
+  const toggleMode = m => {
+    setBlockNote('');
+    setMapMode(cur => (cur === m ? 'none' : m));
+  };
+
   return (
-    <div className={'layout' + (mode === 'dijkstra' ? ' dj-mode' : '')}>
+    <div className={'layout' + (mode !== 'normal' ? ' dj-mode' : '')}>
       <aside className="panel">
         <header className="brand">
           <h1>Rute pengantaran MBG</h1>
@@ -350,20 +502,36 @@ export default function App() {
             >
               Dijkstra
             </button>
-            {mode === 'dijkstra' && dijk && (
+            <button
+              className={'dj-btn' + (mode === 'astar' ? ' on' : '')}
+              onClick={() => setMode(m => (m === 'astar' ? 'normal' : 'astar'))}
+            >
+              A*
+            </button>
+            {mode !== 'normal' && viz && (
               <span className="dj-ms">
-                <b>{dijk.ms.toFixed(2)}</b> ms
+                <b>{viz.ms.toFixed(2)}</b> ms
               </span>
             )}
           </div>
-          {mode === 'dijkstra' && dijk && (
+          {mode === 'astar' && (
+            <label className="dj-w">
+              <span className="lbl">Bobot heuristik (w)</span>
+              <input type="text" inputMode="decimal" value={wText} onChange={e => setWText(e.target.value)} />
+              <span className="note">
+                1 = jalur dijamin optimal. Lebih besar = simpul dikunjungi lebih sedikit, tapi jalur bisa lebih
+                panjang. Batas 1 sampai 5.
+              </span>
+            </label>
+          )}
+          {mode !== 'normal' && viz && (
             <div className="dj-info">
               <span className="lbl">Tujuan (boleh lebih dari satu)</span>
               <div className="dj-targets">
                 {places.slice(1).map((p, k) => {
                   const i = k + 1;
                   const on = targets.includes(i);
-                  const r = dijk.routes.find(x => x.place === i);
+                  const r = viz.routes.find(x => x.place === i);
                   return (
                     <label key={i} className="dj-target">
                       <input type="checkbox" checked={on} onChange={() => toggleTarget(i)} />
@@ -375,9 +543,33 @@ export default function App() {
                 })}
               </div>
               <p className="note">
-                {dijk.orderCoords.length.toLocaleString('id-ID')} simpul dikunjungi untuk {targets.length} tujuan
-                sekaligus. Waktu = rata-rata 20 kali pencarian, tanpa animasi.
+                {viz.orderCoords.length.toLocaleString('id-ID')} simpul dikunjungi untuk {targets.length} tujuan
+                {mode === 'astar' ? ', dicari satu per satu' : ' sekaligus'}. Waktu = rata-rata 20 kali pencarian,
+                tanpa animasi.
               </p>
+              {mode === 'astar' && viz.compare && (
+                <div className="dj-compare">
+                  <span className="lbl">Dijkstra vs A* (tiap tujuan dicari sendiri)</span>
+                  <div className="cmp-row head"><span /><span>Simpul</span><span>ms</span></div>
+                  <div className="cmp-row">
+                    <span>Dijkstra</span>
+                    <span>{viz.compare.visitedD.toLocaleString('id-ID')}</span>
+                    <span>{viz.compare.msD.toFixed(2)}</span>
+                  </div>
+                  <div className="cmp-row">
+                    <span>A* (w {astarW})</span>
+                    <span>{viz.compare.visitedA.toLocaleString('id-ID')}</span>
+                    <span>{viz.compare.msA.toFixed(2)}</span>
+                  </div>
+                  <p className="note">
+                    Simpul {viz.compare.visitedA <= viz.compare.visitedD ? 'berkurang' : 'bertambah'}{' '}
+                    {Math.abs((1 - viz.compare.visitedA / viz.compare.visitedD) * 100).toFixed(1)}%.{' '}
+                    {viz.compare.costGap < 1e-9
+                      ? 'Biaya jalur sama dengan Dijkstra.'
+                      : `Jalur ${(viz.compare.costGap * 100).toFixed(1)}% lebih panjang dari Dijkstra.`}
+                  </p>
+                </div>
+              )}
             </div>
           )}
           <div className="toggle">
@@ -400,24 +592,18 @@ export default function App() {
             <b>Blokade jalan</b>
             <span className="count">{blockages.length}</span>
           </div>
-          <button className={'btn' + (addMode ? ' on' : '')} onClick={() => setAddMode(m => !m)}>
-            {addMode ? 'Selesai menambah' : 'Tambah blokade (klik peta)'}
+          <button className={'btn' + (mapMode === 'blockage' ? ' on' : '')} onClick={() => toggleMode('blockage')}>
+            {mapMode === 'blockage' ? 'Selesai menambah' : 'Tambah blokade (klik peta)'}
           </button>
-          <label className="radius">
-            Radius blokade berikutnya: {radius} m
-            <input
-              type="range" min="15" max="150" step="5" value={radius}
-              onChange={e => setRadius(Number(e.target.value))}
-            />
-          </label>
+          {blockNote && <p className="note">{blockNote}</p>}
 
           {blockages.length === 0 && (
-            <p className="note">Belum ada blokade. Aktifkan tombol di atas, lalu klik di jalan pada peta.</p>
+            <p className="note">Belum ada blokade. Aktifkan tombol di atas, lalu klik di jalan yang ingin ditutup.</p>
           )}
 
           {blockages.map((b, k) => (
             <div key={b.id} className="hz-item">
-              <span>Blokade {k + 1} · {b.radius} m</span>
+              <span>Blokade {k + 1}</span>
               <button className="small" onClick={() => removeBlockage(b.id)}>Hapus</button>
             </div>
           ))}
@@ -432,6 +618,65 @@ export default function App() {
                 : 'Blokade ini tidak mengubah rute terbaik.'}
             </p>
           )}
+        </div>
+
+        <div className="sec">
+          <div className="hz-head">
+            <b>Lokasi</b>
+            <span className="count">{data.schools.length} sekolah</span>
+          </div>
+          <div className="loc-actions">
+            <button
+              className={'btn' + (mapMode === 'school' ? ' on' : '')}
+              onClick={() => toggleMode('school')}
+              disabled={data.schools.length >= MAX_SCHOOLS && mapMode !== 'school'}
+            >
+              {mapMode === 'school' ? 'Selesai menambah' : 'Tambah sekolah (klik peta)'}
+            </button>
+            <button className={'btn' + (mapMode === 'kitchen' ? ' on' : '')} onClick={() => toggleMode('kitchen')}>
+              {mapMode === 'kitchen' ? 'Klik lokasi dapur baru' : 'Pindahkan dapur (klik peta)'}
+            </button>
+          </div>
+          {data.schools.length >= MAX_SCHOOLS && (
+            <p className="note">Maksimal {MAX_SCHOOLS} sekolah (batas brute force).</p>
+          )}
+          <div className="loc-list">
+            <div className="loc-row">
+              <span className="badge kitchen" onClick={() => select(0)}>D</span>
+              <input
+                className="loc-name"
+                value={data.kitchen.name ?? ''}
+                onChange={e => updateKitchen({ name: e.target.value })}
+                aria-label="Nama dapur"
+              />
+            </div>
+            {data.schools.map((sc, k) => (
+              <div className="loc-row" key={sc.id ?? k}>
+                <span className="badge" style={{ background: '#6b7280' }} onClick={() => select(k + 1)}>•</span>
+                <input
+                  className="loc-name"
+                  value={sc.name ?? ''}
+                  onChange={e => updateSchool(k, { name: e.target.value })}
+                  aria-label="Nama sekolah"
+                />
+                <input
+                  className="loc-num"
+                  type="number"
+                  min="0"
+                  value={sc.students ?? 0}
+                  onChange={e => updateSchool(k, { students: Number(e.target.value) || 0 })}
+                  aria-label="Jumlah siswa"
+                  title="Jumlah siswa"
+                />
+                <button className="small" onClick={() => removeSchool(k)}>Hapus</button>
+              </div>
+            ))}
+          </div>
+          <p className="note">Geser marker di peta untuk memindahkan lokasi. Perubahan tersimpan di browser ini.</p>
+          <div className="loc-actions">
+            <button className="small" onClick={downloadData}>Unduh data.json</button>
+            <button className="small" onClick={resetData}>Kembalikan data awal</button>
+          </div>
         </div>
 
         {unreachable.length > 0 && (
@@ -493,7 +738,7 @@ export default function App() {
           attribution="&copy; OpenStreetMap contributors"
         />
         <FlyTo target={flyTarget} />
-        <ClickHandler active={addMode} onClick={addBlockage} />
+        <ClickHandler active={mapMode !== 'none'} onClick={onMapClick} />
 
         {mode === 'normal' && showNaive && (
           <Polyline
@@ -509,30 +754,37 @@ export default function App() {
           <Polyline key={'l' + k} positions={p.points} pathOptions={{ color: p.color, weight: 5 }} />
         ))}
 
+        {/* Palang jalan: garis melintang merah-putih di ruas yang ditutup */}
         {blockages.map((b, k) => (
-          <Circle
-            key={b.id}
-            center={[b.lat, b.lng]}
-            radius={b.radius}
-            pathOptions={{ color: '#dc2626', weight: 3, fillColor: '#dc2626', fillOpacity: 0.25 }}
-          >
+          <Polyline key={'bo' + b.id} positions={b.ends} pathOptions={{ color: '#1f2937', weight: 12, lineCap: 'butt' }}>
             <Tooltip>Blokade {k + 1}</Tooltip>
-          </Circle>
+          </Polyline>
+        ))}
+        {blockages.map(b => (
+          <Polyline key={'br' + b.id} positions={b.ends} pathOptions={{ color: '#dc2626', weight: 8, lineCap: 'butt', interactive: false }} />
+        ))}
+        {blockages.map(b => (
+          <Polyline key={'bw' + b.id} positions={b.ends} pathOptions={{ color: '#fff', weight: 8, dashArray: '7 7', lineCap: 'butt', interactive: false }} />
         ))}
 
-        {mode === 'dijkstra' && dijk && (
+        {mode !== 'normal' && viz && (
           <>
-            <FitBounds bounds={dijk.bounds} />
-            <SearchLayer coords={dijk.orderCoords} parents={dijk.parentCoords} step={dijkStep} />
-            {dijkStep >= dijk.orderCoords.length && (
+            <FitBounds bounds={viz.bounds} />
+            <SearchLayer
+              coords={viz.orderCoords}
+              parents={viz.parentCoords}
+              step={dijkStep}
+              color={mode === 'astar' ? '#a855f7' : '#06b6d4'}
+            />
+            {dijkStep >= viz.orderCoords.length && (
               <>
-                {dijk.routes.map(
+                {viz.routes.map(
                   (r, k) =>
                     r.found && (
                       <Polyline key={'dc' + k} positions={r.latlngs} pathOptions={{ color: '#fff', weight: 10, opacity: 0.95 }} />
                     )
                 )}
-                {dijk.routes.map(
+                {viz.routes.map(
                   (r, k) =>
                     r.found && (
                       <Polyline key={'dr' + k} positions={r.latlngs} pathOptions={{ color: djColor(k), weight: 6 }} />
@@ -546,7 +798,7 @@ export default function App() {
         {places.map((p, i) => {
           const pos = route.indexOf(i);
           let icon;
-          if (mode === 'dijkstra') {
+          if (mode !== 'normal') {
             icon =
               i === 0
                 ? pin('D', 'kitchen', false)
@@ -561,7 +813,11 @@ export default function App() {
               key={i}
               position={[p.lat, p.lng]}
               icon={icon}
-              eventHandlers={{ click: () => setActive(i) }}
+              draggable={mode === 'normal'}
+              eventHandlers={{
+                click: () => setActive(i),
+                dragend: e => moveLocation(i, e.target.getLatLng()),
+              }}
             >
               <Tooltip>{p.name}</Tooltip>
             </Marker>
