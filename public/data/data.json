@@ -1,22 +1,22 @@
 {
   "kitchen": {
-    "name": "SPPG Gandul",
-    "lat": -6.313757246014033, 
-    "lng": 106.79554549248644
+    "name": "SPPG Cinere 2 Depok",
+    "lat": -6.318258752645782,
+    "lng": 106.7975535594394
   },
   "schools": [
     {
-      "id": 1,
-      "name": "SMPN 85 Jakarta",
-      "lat": -6.312432690389074, 
-      "lng": 106.79492629248641,
+      "id": 2,
+      "name": "SD Keluarga Widuri",
+      "lat": -6.304440305843463,
+      "lng": 106.78842288390304,
       "students": 859
     },
     {
       "id": 2,
-      "name": "SDN 05 Pagi Pondok Labu",
-      "lat": -6.307085,
-      "lng": 106.793217,
+      "name": "SDN 12 Pondok Labu",
+      "lat": -6.31382188953015,
+      "lng": 106.80473704702086,
       "students": 300
     },
     {
@@ -28,4 +28,3 @@
     }
   ]
 }
-

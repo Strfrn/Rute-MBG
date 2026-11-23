@@ -5,7 +5,7 @@ import {
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './App.css';
-import { buildGraph } from './algorithms/graph.js';
+import { buildGraph, haversine } from './algorithms/graph.js';
 import { largestComponent, snapPoint } from './algorithms/snap.js';
 import { buildMatrix } from './algorithms/matrix.js';
 import { bruteForce, naiveRoute, routeCost } from './algorithms/route.js';
@@ -36,6 +36,37 @@ const DJ_COLORS = [
 ];
 function djColor(k) {
   return k < DJ_COLORS.length ? DJ_COLORS[k] : `hsl(${(k * 137.5) % 360} 70% 40%)`;
+}
+
+// Angka untuk penjelasan perhitungan (satuan dasar: meter atau detik)
+function fmtN(key, v) {
+  return key === 'dist' ? Math.round(v).toLocaleString('id-ID') + ' m' : v.toFixed(1) + ' detik';
+}
+
+// Contoh perhitungan untuk satu simpul (di tengah) pada jalur ke tujuan pertama
+function explainExample(adj, coords, path, key, vmax) {
+  if (!path || path.length < 3) return null;
+  const g = [0];
+  for (let i = 1; i < path.length; i++) {
+    const costs = (adj.get(path[i - 1]) || []).filter(e => e.to === path[i]).map(e => e[key]);
+    g.push(g[i - 1] + (costs.length ? Math.min(...costs) : 0));
+  }
+  const total = g[g.length - 1];
+  const k = Math.floor((path.length - 1) / 2);
+  const d = haversine(coords.get(path[k]), coords.get(path[path.length - 1]));
+  return { k, n: path.length, g: g[k], h: key === 'dist' ? d : d / vmax, remaining: total - g[k] };
+}
+
+function sumStats(list) {
+  const z = { visited: 0, pops: 0, pushes: 0, examined: 0, relaxed: 0 };
+  for (const st of list) for (const k of Object.keys(z)) z[k] += st[k];
+  return z;
+}
+
+// Teks "berkurang 12.3%" / "bertambah 4.0%" dari jumlah a dibanding b
+function reduction(a, b) {
+  const v = (1 - a / b) * 100;
+  return (v >= 0 ? 'berkurang ' : 'bertambah ') + Math.abs(v).toFixed(1) + '%';
 }
 
 function fmt(key, v) {
@@ -189,6 +220,7 @@ export default function App() {
   const [blockNote, setBlockNote] = useState('');
   const [mode, setMode] = useState('normal'); // 'normal', 'dijkstra', atau 'astar'
   const [wText, setWText] = useState('1'); // bobot heuristik A*
+  const [snaps, setSnaps] = useState({ dijkstra: null, astar: null }); // hasil simulasi terakhir
   const [dijkTargets, setDijkTargets] = useState(null); // null = pakai 3 sekolah pertama pada rute
   const [dijkStep, setDijkStep] = useState(0);
 
@@ -249,7 +281,15 @@ export default function App() {
     [base, blockages]
   );
 
-  // Satu pencarian Dijkstra untuk semua tujuan, lalu waktunya diukur (rata-rata 20 kali)
+  // Ukuran graph (setelah blokade): V simpul, E ruas berarah
+  const graphStats = useMemo(() => {
+    if (!adjNow) return null;
+    let E = 0;
+    for (const list of adjNow.values()) E += list.length;
+    return { V: adjNow.size, E };
+  }, [adjNow]);
+
+  // Satu pencarian Dijkstra untuk semua tujuan (waktunya diukur di `compare`)
   const dijk = useMemo(() => {
     if (mode !== 'dijkstra' || !base || !adjNow) return null;
     const valid = targets.filter(t => t > 0 && t < base.nodes.length);
@@ -257,12 +297,7 @@ export default function App() {
     const from = base.nodes[0];
     const toNodes = valid.map(t => base.nodes[t]);
     const t = dijkstraTrace(adjNow, from, toNodes, objective);
-
-    dijkstra(adjNow, from, objective, toNodes); // pemanasan
-    const RUNS = 20;
-    const t0 = performance.now();
-    for (let i = 0; i < RUNS; i++) dijkstra(adjNow, from, objective, toNodes);
-    const ms = (performance.now() - t0) / RUNS;
+    const vmax = maxSpeed(adjNow) * 1.000001;
 
     const co = id => base.g.coords.get(id);
     const routes = t.results.map((r, k) => ({
@@ -274,18 +309,23 @@ export default function App() {
     const pts = routes.flatMap(r => r.latlngs);
     const bounds = pts.length ? pts : [[base.places[0].lat, base.places[0].lng]];
     return {
-      ms,
       routes,
       bounds,
       orderCoords: t.order.map(co),
       parentCoords: t.parent.map(p => (p === null ? null : co(p))),
+      explain: {
+        ex: explainExample(adjNow, base.g.coords, t.results[0].path, objective, vmax),
+        stats: t.stats,
+        place: valid[0],
+        vmaxKmh: vmax * 3.6,
+      },
     };
   }, [mode, base, adjNow, targets, objective]);
 
   // Bobot heuristik A* (1 sampai 5)
   const astarW = Math.max(1, Math.min(5, parseFloat(String(wText).replace(',', '.')) || 1));
 
-  // A* untuk tiap tujuan (satu per satu), dibandingkan dengan Dijkstra untuk tujuan yang sama
+  // A* untuk tiap tujuan (satu per satu), untuk visualisasi
   const astarRes = useMemo(() => {
     if (mode !== 'astar' || !base || !adjNow) return null;
     const valid = targets.filter(t => t > 0 && t < base.nodes.length);
@@ -297,7 +337,44 @@ export default function App() {
     const vmax = maxSpeed(adjNow) * 1.000001;
 
     const A = toNodes.map(to => astar(adjNow, coords, from, to, objective, astarW, vmax, true));
+    const routes = A.map((r, k) => ({
+      place: valid[k],
+      found: r.found,
+      cost: r.cost,
+      latlngs: r.path.map(id => [co(id).lat, co(id).lon]),
+    }));
+    const pts = routes.flatMap(r => r.latlngs);
+    return {
+      routes,
+      bounds: pts.length ? pts : [[base.places[0].lat, base.places[0].lng]],
+      orderCoords: A.flatMap(r => r.order).map(co),
+      parentCoords: A.flatMap(r => r.parent).map(p => (p === null ? null : co(p))),
+      explain: {
+        ex: explainExample(adjNow, coords, A[0].path, objective, vmax),
+        stats: sumStats(A.map(r => r.stats)),
+        place: valid[0],
+        vmaxKmh: vmax * 3.6,
+      },
+    };
+  }, [mode, base, adjNow, targets, objective, astarW]);
+
+  // Perbandingan untuk tujuan yang sama, dihitung di mode Dijkstra maupun A*:
+  //   S = Dijkstra sekali jalan untuk semua tujuan (berbagi satu gelombang pencarian)
+  //   D = Dijkstra dijalankan terpisah untuk tiap tujuan
+  //   A = A* dijalankan terpisah untuk tiap tujuan
+  const compare = useMemo(() => {
+    if (mode === 'normal' || !base || !adjNow) return null;
+    const valid = targets.filter(t => t > 0 && t < base.nodes.length);
+    if (!valid.length) return null;
+    const from = base.nodes[0];
+    const toNodes = valid.map(t => base.nodes[t]);
+    const coords = base.g.coords;
+    const vmax = maxSpeed(adjNow) * 1.000001;
+
+    // Jumlah simpul dan biaya jalur
+    const A = toNodes.map(to => astar(adjNow, coords, from, to, objective, astarW, vmax));
     const D = toNodes.map(to => dijkstraTrace(adjNow, from, [to], objective));
+    const S = dijkstraTrace(adjNow, from, toNodes, objective);
 
     // Waktu: rata-rata 20 kali, tanpa merekam apa pun
     const bench = fn => {
@@ -309,6 +386,7 @@ export default function App() {
     };
     const msA = bench(() => toNodes.forEach(to => astar(adjNow, coords, from, to, objective, astarW, vmax)));
     const msD = bench(() => toNodes.forEach(to => dijkstra(adjNow, from, objective, [to])));
+    const msS = bench(() => dijkstra(adjNow, from, objective, toNodes));
 
     let costGap = 0;
     A.forEach((r, k) => {
@@ -316,28 +394,45 @@ export default function App() {
       if (isFinite(r.cost) && isFinite(d) && d > 0) costGap = Math.max(costGap, (r.cost - d) / d);
     });
 
-    const routes = A.map((r, k) => ({
-      place: valid[k],
-      found: r.found,
-      cost: r.cost,
-      latlngs: r.path.map(id => [co(id).lat, co(id).lon]),
-    }));
-    const pts = routes.flatMap(r => r.latlngs);
     return {
-      ms: msA,
-      routes,
-      bounds: pts.length ? pts : [[base.places[0].lat, base.places[0].lng]],
-      orderCoords: A.flatMap(r => r.order).map(co),
-      parentCoords: A.flatMap(r => r.parent).map(p => (p === null ? null : co(p))),
-      compare: {
-        msA,
-        msD,
-        visitedA: A.reduce((sum, r) => sum + r.visited, 0),
-        visitedD: D.reduce((sum, r) => sum + r.order.length, 0),
-        costGap,
-      },
+      visitedA: A.reduce((sum, r) => sum + r.visited, 0),
+      visitedD: D.reduce((sum, r) => sum + r.order.length, 0),
+      visitedS: S.order.length,
+      msA,
+      msD,
+      msS,
+      costGap,
     };
   }, [mode, base, adjNow, targets, objective, astarW]);
+
+  // Hasil simulasi disimpan per algoritma, dan hanya berlaku untuk kondisi yang sama
+  // (tujuan, jenis bobot, blokade, lokasi). Kalau kondisi berubah, tabel kembali ke 0.
+  const condKey = JSON.stringify([objective, targets, blockages.map(b => b.id), geoKey]);
+  useEffect(() => {
+    if (!compare) return;
+    if (mode === 'dijkstra') {
+      setSnaps(sn => ({
+        ...sn,
+        dijkstra: {
+          key: condKey,
+          visitedS: compare.visitedS,
+          msS: compare.msS,
+          visitedD: compare.visitedD,
+          msD: compare.msD,
+        },
+      }));
+    } else if (mode === 'astar') {
+      setSnaps(sn => ({
+        ...sn,
+        astar: {
+          key: condKey + '|' + astarW,
+          visitedA: compare.visitedA,
+          msA: compare.msA,
+          costGap: compare.costGap,
+        },
+      }));
+    }
+  }, [compare, mode, condKey, astarW]);
 
   // Hasil yang sedang divisualisasikan (Dijkstra atau A*)
   const viz = mode === 'astar' ? astarRes : dijk;
@@ -379,6 +474,12 @@ export default function App() {
   }, [current, replay]);
 
   if (!plan) return <p style={{ padding: 20 }}>Menghitung rute...</p>;
+
+  // Nilai tabel perbandingan: 0 sampai simulasinya dijalankan
+  const dSnap = snaps.dijkstra && snaps.dijkstra.key === condKey ? snaps.dijkstra : null;
+  const aSnap = snaps.astar && snaps.astar.key === condKey + '|' + astarW ? snaps.astar : null;
+  const num = v => v.toLocaleString('id-ID');
+  const ex = mode !== 'normal' && viz ? viz.explain : null;
 
   const places = [data.kitchen, ...data.schools];
   const { unreachable } = plan;
@@ -508,9 +609,9 @@ export default function App() {
             >
               A*
             </button>
-            {mode !== 'normal' && viz && (
+            {mode !== 'normal' && compare && (
               <span className="dj-ms">
-                <b>{viz.ms.toFixed(2)}</b> ms
+                <b>{(mode === 'astar' ? compare.msA : compare.msS).toFixed(2)}</b> ms
               </span>
             )}
           </div>
@@ -547,29 +648,6 @@ export default function App() {
                 {mode === 'astar' ? ', dicari satu per satu' : ' sekaligus'}. Waktu = rata-rata 20 kali pencarian,
                 tanpa animasi.
               </p>
-              {mode === 'astar' && viz.compare && (
-                <div className="dj-compare">
-                  <span className="lbl">Dijkstra vs A* (tiap tujuan dicari sendiri)</span>
-                  <div className="cmp-row head"><span /><span>Simpul</span><span>ms</span></div>
-                  <div className="cmp-row">
-                    <span>Dijkstra</span>
-                    <span>{viz.compare.visitedD.toLocaleString('id-ID')}</span>
-                    <span>{viz.compare.msD.toFixed(2)}</span>
-                  </div>
-                  <div className="cmp-row">
-                    <span>A* (w {astarW})</span>
-                    <span>{viz.compare.visitedA.toLocaleString('id-ID')}</span>
-                    <span>{viz.compare.msA.toFixed(2)}</span>
-                  </div>
-                  <p className="note">
-                    Simpul {viz.compare.visitedA <= viz.compare.visitedD ? 'berkurang' : 'bertambah'}{' '}
-                    {Math.abs((1 - viz.compare.visitedA / viz.compare.visitedD) * 100).toFixed(1)}%.{' '}
-                    {viz.compare.costGap < 1e-9
-                      ? 'Biaya jalur sama dengan Dijkstra.'
-                      : `Jalur ${(viz.compare.costGap * 100).toFixed(1)}% lebih panjang dari Dijkstra.`}
-                  </p>
-                </div>
-              )}
             </div>
           )}
           <div className="toggle">
@@ -728,6 +806,7 @@ export default function App() {
         </div>
       </aside>
 
+      <div className="map-wrap">
       <MapContainer
         center={[places[0].lat, places[0].lng]}
         zoom={14}
@@ -824,6 +903,125 @@ export default function App() {
           );
         })}
       </MapContainer>
+
+      </div>
+
+      <aside className="side-right">
+      <div className="side-card">
+        <div className="dock-head">
+          <b>Perbandingan algoritma</b>
+          <span>
+            {objective === 'dist' ? 'Jarak' : 'Waktu'} · {targets.length} tujuan
+          </span>
+        </div>
+        <div className="dock-row head">
+          <span />
+          <span>Simpul</span>
+          <span>ms</span>
+        </div>
+        <div className="dock-row">
+          <span>Dijkstra, sekali jalan</span>
+          <span>{dSnap ? num(dSnap.visitedS) : 0}</span>
+          <span>{dSnap ? dSnap.msS.toFixed(2) : '0.00'}</span>
+        </div>
+        <div className="dock-row">
+          <span>Dijkstra, tiap tujuan</span>
+          <span>{dSnap ? num(dSnap.visitedD) : 0}</span>
+          <span>{dSnap ? dSnap.msD.toFixed(2) : '0.00'}</span>
+        </div>
+        <div className="dock-row">
+          <span>A* (w {astarW}), tiap tujuan</span>
+          <span>{aSnap ? num(aSnap.visitedA) : 0}</span>
+          <span>{aSnap ? aSnap.msA.toFixed(2) : '0.00'}</span>
+        </div>
+        <p className="dock-note">
+          {dSnap && aSnap
+            ? `Simpul A* ${reduction(aSnap.visitedA, dSnap.visitedS)} dibanding Dijkstra sekali jalan dan ${reduction(
+                aSnap.visitedA,
+                dSnap.visitedD
+              )} dibanding Dijkstra tiap tujuan. ${
+                aSnap.costGap < 1e-9
+                  ? 'Biaya jalur A* sama dengan Dijkstra.'
+                  : `Jalur A* ${(aSnap.costGap * 100).toFixed(1)}% lebih panjang dari Dijkstra.`
+              }`
+            : 'Jalankan Dijkstra dan A* (tombol di panel) untuk mengisi perbandingan.'}
+        </p>
+      </div>
+
+          {ex && graphStats && (
+            <details className="explain" open>
+              <summary>Cara perhitungannya</summary>
+              <p className="ex-formula">{mode === 'astar' ? 'prioritas = g + w × h' : 'prioritas = g'}</p>
+              <p className="note">
+                <b>g</b> = biaya nyata dari dapur sampai simpul itu.
+                {mode === 'astar' && (
+                  <>
+                    {' '}<b>h</b> = tebakan sisa biaya ke tujuan, yaitu jarak lurus
+                    {objective === 'time' ? ` dibagi kecepatan tertinggi (${ex.vmaxKmh.toFixed(0)} km/jam)` : ''}.{' '}
+                    <b>w</b> = bobot (sekarang {astarW}).
+                  </>
+                )}{' '}
+                Simpul dengan prioritas terkecil diproses lebih dulu.
+              </p>
+              {ex.ex ? (
+                <div className="ex-box">
+                  <span className="lbl">
+                    Contoh: simpul ke-{ex.ex.k + 1} dari {ex.ex.n} pada jalur ke {places[ex.place].name}
+                  </span>
+                  <div>g = {fmtN(objective, ex.ex.g)}</div>
+                  {mode === 'astar' ? (
+                    <>
+                      <div>h = {fmtN(objective, ex.ex.h)}</div>
+                      <div>
+                        prioritas = {fmtN(objective, ex.ex.g)} + {astarW} × {fmtN(objective, ex.ex.h)} ={' '}
+                        <b>{fmtN(objective, ex.ex.g + astarW * ex.ex.h)}</b>
+                      </div>
+                      <p className="note">
+                        Sisa biaya sebenarnya = {fmtN(objective, ex.ex.remaining)}. h{' '}
+                        {ex.ex.h <= ex.ex.remaining + 1e-6 ? '≤' : '>'} sisa, jadi tebakannya{' '}
+                        {ex.ex.h <= ex.ex.remaining + 1e-6 ? 'tidak berlebihan' : 'berlebihan'}.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        prioritas = <b>{fmtN(objective, ex.ex.g)}</b>
+                      </div>
+                      <p className="note">
+                        A* akan menambahkan h = {fmtN(objective, ex.ex.h)} di sini, sehingga prioritasnya{' '}
+                        {fmtN(objective, ex.ex.g + ex.ex.h)}.
+                      </p>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <p className="note">Jalur terlalu pendek untuk dijadikan contoh.</p>
+              )}
+              <div className="ex-box">
+                <span className="lbl">
+                  Ukuran dan kerja pencarian{mode === 'astar' && targets.length > 1 ? ' (jumlah semua tujuan)' : ''}
+                </span>
+                <div className="ex-row"><span>Graph</span><span>{num(graphStats.V)} simpul, {num(graphStats.E)} ruas</span></div>
+                <div className="ex-row"><span>Simpul diproses</span><span>{num(ex.stats.visited)}</span></div>
+                <div className="ex-row"><span>Ruas diperiksa</span><span>{num(ex.stats.examined)}</span></div>
+                <div className="ex-row"><span>Biaya diperbarui</span><span>{num(ex.stats.relaxed)}</span></div>
+                <div className="ex-row">
+                  <span>Operasi antrian</span>
+                  <span>{num(ex.stats.pushes + ex.stats.pops)} (masuk {num(ex.stats.pushes)}, keluar {num(ex.stats.pops)})</span>
+                </div>
+                <p className="note">
+                  Ordo O((V + E) log V). Nilai rumusnya: ({num(graphStats.V)} + {num(graphStats.E)}) × log₂({num(graphStats.V)}) ≈{' '}
+                  {num(Math.round((graphStats.V + graphStats.E) * Math.log2(Math.max(2, graphStats.V))))}. Ini batas atas
+                  untuk menjelajah seluruh graph, bukan hitungan persis.
+                  {mode === 'astar' ? ' A* memakai ordo yang sama di kasus terburuk, tapi heuristik membuat kerja sebenarnya jauh lebih kecil.' : ''}
+                </p>
+              </div>
+            </details>
+          )}
+        {!(ex && graphStats) && (
+          <p className="note">Pilih Dijkstra atau A* di panel kiri untuk melihat cara perhitungannya.</p>
+        )}
+      </aside>
     </div>
   );
 }

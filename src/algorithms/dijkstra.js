@@ -76,9 +76,11 @@ export function dijkstraTrace(adj, start, targets, weightKey) {
   const remaining = new Set(targets);
   const heap = new MinHeap();
   heap.push([0, start]);
+  let pushes = 1, pops = 0, examined = 0, relaxed = 0; // hitungan kerja algoritma
 
   while (heap.size) {
     const [c, u] = heap.pop();
+    pops++;
     if (done.has(u)) continue;
     done.add(u);
     order.push(u);
@@ -88,11 +90,14 @@ export function dijkstraTrace(adj, start, targets, weightKey) {
     if (targets.length && remaining.size === 0) break;
 
     for (const e of adj.get(u) || []) {
+      examined++;
       const nc = c + e[weightKey];
       if (nc < (cost.get(e.to) ?? Infinity)) {
         cost.set(e.to, nc);
         prev.set(e.to, u);
         heap.push([nc, e.to]);
+        relaxed++;
+        pushes++;
       }
     }
   }
@@ -103,7 +108,7 @@ export function dijkstraTrace(adj, start, targets, weightKey) {
     path: done.has(t) ? buildPath(prev, t) : [],
     cost: done.has(t) ? cost.get(t) : Infinity,
   }));
-  return { order, parent, results };
+  return { order, parent, results, stats: { visited: order.length, pops, pushes, examined, relaxed } };
 }
 
 // Susun jalur dari start ke target (daftar node)

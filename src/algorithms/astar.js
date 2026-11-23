@@ -36,9 +36,11 @@ export function astar(adj, coords, start, target, weightKey, w = 1, vmax = 1, re
   let visited = 0;
   const heap = new MinHeap();
   heap.push([w * h(start), start]);
+  let pushes = 1, pops = 0, examined = 0, relaxed = 0; // hitungan kerja algoritma
 
   while (heap.size) {
     const [, u] = heap.pop();
+    pops++;
     if (done.has(u)) continue;
     done.add(u);
     visited++;
@@ -50,11 +52,14 @@ export function astar(adj, coords, start, target, weightKey, w = 1, vmax = 1, re
 
     const cu = cost.get(u);
     for (const e of adj.get(u) || []) {
+      examined++;
       const nc = cu + e[weightKey];
       if (nc < (cost.get(e.to) ?? Infinity)) {
         cost.set(e.to, nc);
         prev.set(e.to, u);
         heap.push([nc + w * h(e.to), e.to]);
+        relaxed++;
+        pushes++;
       }
     }
   }
@@ -67,5 +72,6 @@ export function astar(adj, coords, start, target, weightKey, w = 1, vmax = 1, re
     order,
     parent,
     path: record && found ? buildPath(prev, target) : [],
+    stats: { visited, pops, pushes, examined, relaxed },
   };
 }

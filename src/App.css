@@ -12,7 +12,7 @@
 /* ---------- Layout ---------- */
 .layout {
   display: grid;
-  grid-template-columns: 380px 1fr;
+  grid-template-columns: 380px 1fr 320px;
   height: 100%;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 }
@@ -123,8 +123,10 @@
 .leaflet-tooltip-right:before { border-right-color: #1b1d21; }
 
 @media (max-width: 760px) {
-  .layout { grid-template-columns: 1fr; grid-template-rows: 55% 45%; }
+  .layout { grid-template-columns: 1fr; grid-template-rows: 50% 25% 25%; }
   .panel { order: 2; border-right: 0; border-top: 1px solid var(--line); }
+  .map-wrap { order: 1; }
+  .side-right { order: 3; border-left: 0; border-top: 1px solid var(--line); }
 }
 
 /* ---------- Dijkstra ---------- */
@@ -180,6 +182,34 @@
   background: var(--well); color: var(--ink); font: inherit; font-size: 13px;
 }
 .dj-compare { display: flex; flex-direction: column; gap: 4px; padding: 10px; border-radius: 8px; background: var(--well); }
-.cmp-row { display: grid; grid-template-columns: 1fr 70px 60px; gap: 8px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.cmp-row { display: grid; grid-template-columns: 1fr 64px 56px; gap: 8px; font-size: 13px; font-variant-numeric: tabular-nums; }
 .cmp-row span:nth-child(n + 2) { text-align: right; }
 .cmp-row.head { font-size: 11px; color: var(--mute); }
+
+/* ---------- Tabel perbandingan melayang di atas peta ---------- */
+.map-wrap { position: relative; min-width: 0; height: 100%; }
+.side-right {
+  display: flex; flex-direction: column; gap: 14px; padding: 14px 16px; overflow-y: auto;
+  background: var(--panel); color: var(--ink); border-left: 1px solid var(--line);
+  scrollbar-width: thin; scrollbar-color: var(--line) transparent;
+}
+.side-right .explain { margin: 0; }
+.side-card { display: flex; flex-direction: column; }
+.dock-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; font-size: 13px; }
+.dock-head span { font-size: 12px; color: var(--mute); }
+.dock-row {
+  display: grid; grid-template-columns: 1fr 62px 52px; gap: 8px; padding: 3px 0;
+  font-size: 13px; font-variant-numeric: tabular-nums;
+}
+.dock-row span:nth-child(n + 2) { text-align: right; }
+.dock-row.head { font-size: 11px; color: var(--mute); border-bottom: 1px solid var(--line); padding-bottom: 4px; margin-bottom: 2px; }
+.dock-note { margin: 6px 0 0; font-size: 12px; line-height: 1.45; color: var(--mute); }
+
+/* ---------- Penjelasan perhitungan ---------- */
+.explain { margin-bottom: 12px; padding: 10px 12px; border-radius: 8px; background: var(--well); }
+.explain summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.explain[open] summary { margin-bottom: 8px; }
+.ex-formula { margin: 0 0 6px; font: 500 14px ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace; }
+.ex-box { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 13px; font-variant-numeric: tabular-nums; }
+.ex-row { display: flex; justify-content: space-between; gap: 10px; }
+.ex-row span:last-child { text-align: right; }
