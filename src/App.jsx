@@ -194,6 +194,194 @@ function SearchLayer({ coords, parents, step, color = '#06b6d4' }) {
   return null;
 }
 
+// SVG ikon van putih MBG tampak dari atas (top-down view) dengan efek 3D halus
+function makeMbgCarIcon(angleDeg) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="56" height="32" viewBox="0 0 56 32">
+    <defs>
+      <!-- Gradien bodi van putih dengan bayangan 3D -->
+      <linearGradient id="vanBody" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stop-color="#ffffff"/>
+        <stop offset="25%" stop-color="#f8fafc"/>
+        <stop offset="70%" stop-color="#e2e8f0"/>
+        <stop offset="100%" stop-color="#cbd5e1"/>
+      </linearGradient>
+      <!-- Gradien atap berdimensi -->
+      <linearGradient id="vanRoof" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stop-color="#ffffff"/>
+        <stop offset="50%" stop-color="#f1f5f9"/>
+        <stop offset="100%" stop-color="#e2e8f0"/>
+      </linearGradient>
+      <!-- Gradien kap depan melengkung -->
+      <linearGradient id="vanHood" x1="0%" y1="0%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="#e2e8f0"/>
+        <stop offset="100%" stop-color="#f8fafc"/>
+      </linearGradient>
+      <!-- Gradien kaca depan gelap dengan kilau -->
+      <linearGradient id="vanGlass" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#334155"/>
+        <stop offset="40%" stop-color="#1e293b"/>
+        <stop offset="60%" stop-color="#38bdf8"/>
+        <stop offset="100%" stop-color="#0f172a"/>
+      </linearGradient>
+      <!-- Bayangan 3D realistis di bawah bodi mobil -->
+      <filter id="vanShadow" x="-20%" y="-20%" width="150%" height="150%">
+        <feDropShadow dx="0" dy="2.5" stdDeviation="2.2" flood-color="#020617" flood-opacity="0.5"/>
+      </filter>
+    </defs>
+
+    <g filter="url(#vanShadow)">
+      <!-- Spion samping kiri & kanan -->
+      <rect x="37" y="4" width="3.2" height="3.5" rx="1.2" fill="#e2e8f0" stroke="#94a3b8" stroke-width="0.5"/>
+      <rect x="37" y="24.5" width="3.2" height="3.5" rx="1.2" fill="#cbd5e1" stroke="#94a3b8" stroke-width="0.5"/>
+
+      <!-- Bodi dasar van putih -->
+      <rect x="5" y="6" width="45" height="20" rx="4.5" fill="url(#vanBody)" stroke="#94a3b8" stroke-width="0.8"/>
+
+      <!-- Bumper belakang & lampu rem merah -->
+      <rect x="4.5" y="8" width="2" height="16" rx="1" fill="#64748b"/>
+      <rect x="4.5" y="6.5" width="2.2" height="3" rx="0.8" fill="#ef4444"/>
+      <rect x="4.5" y="22.5" width="2.2" height="3" rx="0.8" fill="#ef4444"/>
+
+      <!-- Bumper depan & lampu depan (headlights) -->
+      <path d="M48,8 Q51,10 51,16 Q51,22 48,24" fill="none" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="47.5" y="7" width="2.5" height="3.5" rx="1" fill="#fef08a" stroke="#ca8a04" stroke-width="0.4"/>
+      <rect x="47.5" y="21.5" width="2.5" height="3.5" rx="1" fill="#fef08a" stroke="#ca8a04" stroke-width="0.4"/>
+
+      <!-- Kap mesin depan (hood) -->
+      <path d="M38,7.5 L47,8 Q49.5,16 47,24 L38,24.5 Z" fill="url(#vanHood)" stroke="#cbd5e1" stroke-width="0.4"/>
+
+      <!-- Kaca depan melengkung (windshield) -->
+      <path d="M33.5,8 L37.5,8 Q39,16 37.5,24 L33.5,24 Q35,16 33.5,8 Z" fill="url(#vanGlass)"/>
+
+      <!-- Jendela samping sopir & penumpang -->
+      <path d="M26,7.5 L32.5,7.5 L32.5,9.2 L26,9.2 Z" fill="#1e293b"/>
+      <path d="M26,22.8 L32.5,22.8 L32.5,24.5 L26,24.5 Z" fill="#0f172a"/>
+
+      <!-- Atap box van dengan sudut melengkung 3D -->
+      <rect x="8.5" y="7.8" width="24.5" height="16.4" rx="2.5" fill="url(#vanRoof)" stroke="#cbd5e1" stroke-width="0.6"/>
+
+      <!-- Tekstur lekukan atap van (roof ribs) -->
+      <line x1="11" y1="11" x2="29" y2="11" stroke="#cbd5e1" stroke-width="0.8" stroke-linecap="round"/>
+      <line x1="11" y1="16" x2="29" y2="16" stroke="#cbd5e1" stroke-width="0.8" stroke-linecap="round"/>
+      <line x1="11" y1="21" x2="29" y2="21" stroke="#cbd5e1" stroke-width="0.8" stroke-linecap="round"/>
+
+      <!-- Badge MBG oranye khas di atap -->
+      <rect x="16" y="13.2" width="10" height="5.6" rx="1.2" fill="#ea580c"/>
+      <text x="21" y="17.4" font-family="system-ui,-apple-system,sans-serif" font-size="4" font-weight="900"
+        fill="#ffffff" text-anchor="middle" letter-spacing="0.4">MBG</text>
+    </g>
+  </svg>`;
+  return L.divIcon({
+    className: '',
+    html: `<div style="transform:rotate(${angleDeg}deg);transform-origin:center;transition:transform 0.08s linear;">${svg}</div>`,
+    iconSize: [56, 32],
+    iconAnchor: [28, 16],
+  });
+}
+
+// Komponen animasi mobil menyusuri jalur latlngs[]
+// Disesuaikan agar gerakannya santai dan natural (tidak terlalu cepat)
+function CarMarker({ routes }) {
+  const map = useMap();
+  const markerRef = useRef(null);
+  const rafRef = useRef(null);
+  const lastAngleRef = useRef(0);
+
+  useEffect(() => {
+    if (!routes || routes.length === 0) return;
+
+    // Gabungkan semua jalur jadi satu array titik berurutan
+    const allPts = routes.flatMap(r => (r.found ? r.latlngs : []));
+    if (allPts.length < 2) return;
+
+    // Hitung panjang tiap segmen (dalam satuan LatLng pixel pada zoom saat ini)
+    const ptL = allPts.map(p => map.latLngToLayerPoint(L.latLng(p)));
+    const segLens = [];
+    let totalLen = 0;
+    for (let i = 1; i < ptL.length; i++) {
+      const dx = ptL[i].x - ptL[i - 1].x;
+      const dy = ptL[i].y - ptL[i - 1].y;
+      const l = Math.hypot(dx, dy);
+      segLens.push(l);
+      totalLen += l;
+    }
+    if (totalLen === 0) return;
+
+    // Hitung sudut awal
+    const initDx = ptL[1].x - ptL[0].x;
+    const initDy = ptL[1].y - ptL[0].y;
+    const initAngle = Math.atan2(initDy, initDx) * (180 / Math.PI);
+    lastAngleRef.current = initAngle;
+
+    // Buat marker pertama kali
+    if (!markerRef.current) {
+      markerRef.current = L.marker(allPts[0], {
+        icon: makeMbgCarIcon(initAngle),
+        zIndexOffset: 1000,
+        interactive: false,
+      }).addTo(map);
+    }
+
+    // Durasi animasi dibuat lebih santai (16-28 detik tergantung panjang jalur)
+    // Sekitar 45-60 ms per piksel agar mobil bergerak tenang dan mudah diikuti
+    const DURATION = Math.max(16000, Math.min(30000, totalLen * 50));
+    const startTime = performance.now();
+
+    const tick = now => {
+      const t = Math.min((now - startTime) / DURATION, 1);
+      const dist = t * totalLen;
+
+      // Cari segmen & interpolasi posisi
+      let acc = 0;
+      let pos = allPts[allPts.length - 1];
+      let angle = lastAngleRef.current;
+
+      for (let i = 0; i < segLens.length; i++) {
+        if (acc + segLens[i] >= dist || i === segLens.length - 1) {
+          const frac = segLens[i] > 0 ? (dist - acc) / segLens[i] : 0;
+          const a = allPts[i];
+          const b = allPts[i + 1] ?? a;
+          pos = [a[0] + frac * (b[0] - a[0]), a[1] + frac * (b[1] - a[1])];
+
+          // Sudut rotasi: arah timur = 0°, searah jarum jam (Leaflet screen coords)
+          const curP = ptL[i];
+          const nxtP = ptL[i + 1] ?? curP;
+          const dx = nxtP.x - curP.x;
+          const dy = nxtP.y - curP.y;
+          if (Math.hypot(dx, dy) > 0.001) {
+            angle = Math.atan2(dy, dx) * (180 / Math.PI);
+            lastAngleRef.current = angle;
+          }
+          break;
+        }
+        acc += segLens[i];
+      }
+
+      if (markerRef.current) {
+        markerRef.current.setLatLng(pos);
+        markerRef.current.setIcon(makeMbgCarIcon(angle));
+      }
+
+      if (t < 1) {
+        rafRef.current = requestAnimationFrame(tick);
+      }
+    };
+
+    rafRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      if (markerRef.current) {
+        markerRef.current.remove();
+        markerRef.current = null;
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routes, map]);
+
+  return null;
+}
+
 // Zoom peta supaya seluruh titik di "bounds" terlihat
 function FitBounds({ bounds }) {
   const map = useMap();
@@ -540,7 +728,7 @@ export default function App() {
     const id = data.schools.reduce((m, sc) => Math.max(m, sc.id || 0), 0) + 1;
     commit({
       ...data,
-      schools: [...data.schools, { id, name: 'Sekolah baru ' + id, lat: ll.lat, lng: ll.lng, students: 300 }],
+      schools: [...data.schools, { id, name: 'Sekolah baru ' + id, lat: ll.lat, lng: ll.lng }],
     });
   };
   const updateSchool = (i, patch) =>
@@ -737,15 +925,6 @@ export default function App() {
                   onChange={e => updateSchool(k, { name: e.target.value })}
                   aria-label="Nama sekolah"
                 />
-                <input
-                  className="loc-num"
-                  type="number"
-                  min="0"
-                  value={sc.students ?? 0}
-                  onChange={e => updateSchool(k, { students: Number(e.target.value) || 0 })}
-                  aria-label="Jumlah siswa"
-                  title="Jumlah siswa"
-                />
                 <button className="small" onClick={() => removeSchool(k)}>Hapus</button>
               </div>
             ))}
@@ -819,17 +998,17 @@ export default function App() {
         <FlyTo target={flyTarget} />
         <ClickHandler active={mapMode !== 'none'} onClick={onMapClick} />
 
-        {mode === 'normal' && showNaive && (
+        {mode !== 'normal' && showNaive && (
           <Polyline
             positions={current.naiveLine}
             pathOptions={{ color: '#666', weight: 3, dashArray: '6 8', opacity: 0.8 }}
           />
         )}
 
-        {legParts.map((p, k) => (
+        {mode !== 'normal' && legParts.map((p, k) => (
           <Polyline key={'c' + k} positions={p.points} pathOptions={{ color: '#fff', weight: 9, opacity: 0.9 }} />
         ))}
-        {legParts.map((p, k) => (
+        {mode !== 'normal' && legParts.map((p, k) => (
           <Polyline key={'l' + k} positions={p.points} pathOptions={{ color: p.color, weight: 5 }} />
         ))}
 
@@ -869,6 +1048,7 @@ export default function App() {
                       <Polyline key={'dr' + k} positions={r.latlngs} pathOptions={{ color: djColor(k), weight: 6 }} />
                     )
                 )}
+                <CarMarker key={replay + '|' + mode + '|' + objective} routes={viz.routes} />
               </>
             )}
           </>
