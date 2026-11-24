@@ -38,7 +38,7 @@ export function nearestNeighbor(matrix) {
   return route;
 }
 
-// 3. Brute Force (Pre-Peningkatan: Baseline)
+// 3. Brute Force (Baseline)
 // Mencoba seluruh permutasi (n-1)! secara menyeluruh
 // Kompleksitas Waktu: O((n - 1)!) - Faktorial
 export function bruteForce(matrix) {

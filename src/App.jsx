@@ -7,7 +7,7 @@ import 'leaflet/dist/leaflet.css';
 import './App.css';
 import { buildGraph, haversine } from './algorithms/graph.js';
 import { largestComponent, snapPoint } from './algorithms/snap.js';
-import { buildMatrix, buildMatrixNaiveDijkstra, buildMatrixBidirectionalDijkstra } from './algorithms/matrix.js';
+import { buildMatrix, buildMatrixNaiveDijkstra, buildMatrixBatchDijkstra, buildMatrixBidirectionalDijkstra } from './algorithms/matrix.js';
 import { bruteForce, heldKarp, naiveRoute, routeCost } from './algorithms/route.js';
 import { routeToCoords, routeToLegs } from './algorithms/roadPath.js';
 import { applyBlockages, makeBlockage } from './algorithms/blockage.js';
@@ -87,12 +87,11 @@ function pin(label, kind, active, color) {
 
 // Hitung rute terbaik untuk kondisi blokade tertentu.
 // Memilih mode algoritma:
-// - 'pre': Pre-Peningkatan (Dijkstra Satu Arah + Brute Force O((N-1)!))
-// - 'post': Peningkatan (Bidirectional Dijkstra Dua Arah + Dynamic Programming Held-Karp O(N² · 2ᴺ))
+// - 'pre': Baseline (Dijkstra Naif Pairwise + Brute Force O((N-1)!))
+// - 'post': Peningkatan (Multi-Target Batch Scan + Dynamic Programming Held-Karp O(N² · 2ᴺ))
 function solve(base, blockages, mode = 'post') {
   const { g, places, nodes } = base;
   const adj = applyBlockages(g.adj, g.coords, blockages);
-  const revAdj = buildReverseAdj(adj);
   const result = {};
   let unreachable = [];
 
@@ -102,7 +101,7 @@ function solve(base, blockages, mode = 'post') {
     if (mode === 'pre') {
       matrixRes = buildMatrixNaiveDijkstra(adj, nodes, key);
     } else {
-      matrixRes = buildMatrixBidirectionalDijkstra(adj, revAdj, nodes, key);
+      matrixRes = buildMatrixBatchDijkstra(adj, nodes, key);
     }
     const matrixTime = performance.now() - t0;
     const full = matrixRes.matrix;
@@ -114,7 +113,7 @@ function solve(base, blockages, mode = 'post') {
     const sub = idx.map(i => idx.map(j => full[i][j]));
 
     // TSP Solver:
-    // Pre-Peningkatan: Brute Force Faktorial O((N-1)!)
+    // Baseline: Brute Force Faktorial O((N-1)!)
     // Peningkatan: Dynamic Programming Held-Karp O(N² · 2ᴺ)
     const tTsp0 = performance.now();
     const route = (mode === 'pre' ? bruteForce(sub) : heldKarp(sub)).map(k => idx[k]);
@@ -405,7 +404,7 @@ function CarMarker({ routes }) {
         markerRef.current = null;
       }
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routes, map]);
 
   return null;
@@ -436,6 +435,8 @@ export default function App() {
   const [mapMode, setMapMode] = useState('none'); // 'none' | 'blockage' | 'school' | 'kitchen'
   const [blockNote, setBlockNote] = useState('');
   const [mode, setMode] = useState('normal'); // 'normal' | 'pre' | 'post'
+  const [runNoncePre, setRunNoncePre] = useState(0);
+  const [runNoncePost, setRunNoncePost] = useState(0);
   const [snaps, setSnaps] = useState({ pre: null, post: null }); // hasil simulasi per mode
   const [dijkTargets, setDijkTargets] = useState(null); // null = pakai 3 sekolah pertama pada rute
   const [dijkStep, setDijkStep] = useState(0);
@@ -448,7 +449,7 @@ export default function App() {
       let saved = null;
       try {
         saved = JSON.parse(localStorage.getItem(STORE_KEY));
-      } catch (e) {}
+      } catch (e) { }
       const ok = saved && saved.kitchen && Array.isArray(saved.schools);
       setFileData(file);
       setData(ok ? saved : file);
@@ -475,11 +476,29 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graphBase, geoKey]);
 
-  // Rute Pre-Peningkatan: Dijkstra Naif (Satu per Satu) + Brute Force O((N-1)!)
-  const planPre = useMemo(() => (base ? solve(base, blockages, 'pre') : null), [base, blockages]);
+  // Rute Baseline: Dijkstra Naif (Pairwise 1 per 1) + Brute Force O((N-1)!)
+  const planPre = useMemo(
+    () => (base ? solve(base, blockages, 'pre') : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [base, blockages, runNoncePre]
+  );
 
   // Rute Peningkatan: Dijkstra Batch Scan + Dynamic Programming Held-Karp O(N² · 2ᴺ)
-  const planPost = useMemo(() => (base ? solve(base, blockages, 'post') : null), [base, blockages]);
+  const planPost = useMemo(
+    () => (base ? solve(base, blockages, 'post') : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [base, blockages, runNoncePost]
+  );
+
+  const handleSelectMode = targetMode => {
+    setMode(targetMode);
+    if (targetMode === 'pre') {
+      setRunNoncePre(n => n + 1);
+    } else {
+      setRunNoncePost(n => n + 1);
+    }
+    setReplay(r => r + 1);
+  };
 
   // Rute aktif sesuai pilihan mode ('pre' | 'post' | 'normal')
   const plan = mode === 'pre' ? planPre : planPost;
@@ -528,7 +547,7 @@ export default function App() {
     const co = id => base.g.coords.get(id);
 
     if (mode === 'pre') {
-      // Pre-Peningkatan: Menjalankan pencarian satu arah terpisah satu per satu
+      // Baseline: Menjalankan pencarian satu arah terpisah satu per satu
       const D = toNodes.map(to => dijkstraTrace(adjNow, from, [to], objective));
       const routes = D.map((t, k) => ({
         place: valid[k],
@@ -546,65 +565,38 @@ export default function App() {
         stats: sumStats(D.map(t => t.stats)),
       };
     } else {
-      if (!revAdjNow) return null;
-      // Peningkatan: Bidirectional Dijkstra (Dua Arah bertemu di tengah)
-      const B = toNodes.map(to => bidirectionalDijkstraTrace(adjNow, revAdjNow, from, to, objective));
-      const routes = B.map((t, k) => ({
+      // Peningkatan (Modifikasi Opsi B): Multi-Target Batch Scan Sekali Jalan
+      const t = dijkstraTrace(adjNow, from, toNodes, objective);
+      const routes = t.results.map((r, k) => ({
         place: valid[k],
-        found: t.found,
-        cost: t.cost,
-        latlngs: t.path.map(id => [co(id).lat, co(id).lon]),
+        found: r.found,
+        cost: r.cost,
+        latlngs: r.path.map(id => [co(id).lat, co(id).lon]),
       }));
       const pts = routes.flatMap(r => r.latlngs);
-
-      // Interleave simpul forward (Cyan #06b6d4) dan backward (Magenta #d946ef)
-      const combinedCoords = [];
-      const combinedParents = [];
-      for (const t of B) {
-        const maxLen = Math.max(t.orderF.length, t.orderB.length);
-        for (let i = 0; i < maxLen; i++) {
-          if (i < t.orderF.length) {
-            const u = t.orderF[i];
-            const p = t.parentF[i];
-            const c = co(u);
-            if (c) {
-              combinedCoords.push({ lat: c.lat, lon: c.lon, color: '#06b6d4' });
-              combinedParents.push(p !== null && co(p) ? co(p) : null);
-            }
-          }
-          if (i < t.orderB.length) {
-            const u = t.orderB[i];
-            const p = t.parentB[i];
-            const c = co(u);
-            if (c) {
-              combinedCoords.push({ lat: c.lat, lon: c.lon, color: '#d946ef' });
-              combinedParents.push(p !== null && co(p) ? co(p) : null);
-            }
-          }
-        }
-      }
-
       return {
         routes,
         bounds: pts.length ? pts : [[base.places[0].lat, base.places[0].lng]],
-        orderCoords: combinedCoords,
-        parentCoords: combinedParents,
+        orderCoords: t.order.map(co),
+        parentCoords: t.parent.map(p => (p === null ? null : co(p))),
         color: '#06b6d4',
-        stats: sumStats(B.map(t => t.stats)),
+        stats: t.stats,
       };
     }
-  }, [mode, base, adjNow, revAdjNow, targets, objective]);
+  }, [mode, base, adjNow, targets, objective]);
 
-  // Perbandingan untuk tujuan yang sama (Dijkstra Satu Arah vs Bidirectional Dijkstra)
+  // Perbandingan untuk tujuan yang sama (Dijkstra Naif Satu per Satu vs Multi-Target Batch Scan)
   const compare = useMemo(() => {
-    if (mode === 'normal' || !base || !adjNow || !revAdjNow) return null;
+    if (mode === 'normal' || !base || !adjNow) return null;
     const valid = targets.filter(t => t > 0 && t < base.nodes.length);
     if (!valid.length) return null;
     const from = base.nodes[0];
     const toNodes = valid.map(t => base.nodes[t]);
 
+    // D = Dijkstra dijalankan terpisah satu per satu untuk tiap tujuan (Baseline)
     const D = toNodes.map(to => dijkstraTrace(adjNow, from, [to], objective));
-    const B = toNodes.map(to => bidirectionalDijkstraTrace(adjNow, revAdjNow, from, to, objective));
+    // S = Multi-Target Batch Scan sekali jalan untuk semua tujuan sekaligus (Peningkatan)
+    const S = dijkstraTrace(adjNow, from, toNodes, objective);
 
     const bench = fn => {
       fn();
@@ -614,15 +606,16 @@ export default function App() {
       return (performance.now() - t0) / RUNS;
     };
     const msD = bench(() => toNodes.forEach(to => dijkstra(adjNow, from, objective, [to])));
-    const msB = bench(() => toNodes.forEach(to => bidirectionalDijkstra(adjNow, revAdjNow, from, to, objective)));
+    const msS = bench(() => dijkstra(adjNow, from, objective, toNodes));
 
     return {
       visitedD: D.reduce((sum, r) => sum + r.order.length, 0),
-      visitedB: B.reduce((sum, r) => sum + (r.orderF.length + r.orderB.length), 0),
+      visitedS: S.order.length,
       msD,
-      msB,
+      msS,
     };
-  }, [mode, base, adjNow, revAdjNow, targets, objective]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, base, adjNow, targets, objective, runNoncePre, runNoncePost]);
 
   // Hasil simulasi disimpan per mode, dan hanya berlaku untuk kondisi yang sama
   const condKey = JSON.stringify([objective, targets, blockages.map(b => b.id), geoKey]);
@@ -642,8 +635,8 @@ export default function App() {
         ...sn,
         post: {
           key: condKey,
-          visitedB: compare.visitedB,
-          msB: compare.msB,
+          visitedS: compare.visitedS,
+          msS: compare.msS,
         },
       }));
     }
@@ -700,7 +693,7 @@ export default function App() {
   // Potong tiap perjalanan sesuai progres animasi, dan beri warna
   const totalLegs = current.legs.length;
   let offset = 0;
-  const legParts = (mode === 'normal' ? current.legs : []).map((leg, k) => {
+  const legParts = (current?.legs || []).map((leg, k) => {
     const visible = Math.max(0, Math.min(leg.length, drawn - offset));
     offset += leg.length;
     return { points: leg.slice(0, visible), color: legColor(k, totalLegs) };
@@ -739,7 +732,7 @@ export default function App() {
     setData(next);
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify(next));
-    } catch (e) {}
+    } catch (e) { }
   };
   const addSchool = ll => {
     if (data.schools.length >= MAX_SCHOOLS) {
@@ -769,7 +762,7 @@ export default function App() {
     if (!window.confirm('Kembalikan ke data.json awal? Perubahan yang belum diunduh akan hilang.')) return;
     try {
       localStorage.removeItem(STORE_KEY);
-    } catch (e) {}
+    } catch (e) { }
     setData(fileData);
     setDijkTargets(null);
     setActive(null);
@@ -808,15 +801,15 @@ export default function App() {
           <div className="dj-row">
             <button
               className={'dj-btn' + (mode === 'pre' ? ' on' : '')}
-              onClick={() => setMode(m => (m === 'pre' ? 'normal' : 'pre'))}
-              title="Dijkstra Satu Arah + Brute Force TSP"
+              onClick={() => handleSelectMode('pre')}
+              title="Baseline: Dijkstra Naif (Pairwise 1 per 1) + Brute Force TSP"
             >
-              Pre-Peningkatan
+              Baseline
             </button>
             <button
               className={'dj-btn' + (mode === 'post' ? ' on' : '')}
-              onClick={() => setMode(m => (m === 'post' ? 'normal' : 'post'))}
-              title="Bidirectional Dijkstra + Dynamic Programming Held-Karp"
+              onClick={() => handleSelectMode('post')}
+              title="Peningkatan: Multi-Target Batch Scan + Dynamic Programming Held-Karp"
             >
               Peningkatan
             </button>
@@ -827,8 +820,8 @@ export default function App() {
             )}
           </div>
           <p className="note" style={{ margin: '0 0 10px', fontSize: 11 }}>
-            {mode === 'pre' && 'Metode: Dijkstra Satu Arah + Brute Force TSP 𝒪((N-1)!)'}
-            {mode === 'post' && 'Metode: Bidirectional Dijkstra + Dynamic Programming Held-Karp 𝒪(N² · 2ᴺ)'}
+            {mode === 'pre' && 'Metode: Baseline (Dijkstra Naif Pairwise 1 per 1 + Brute Force TSP 𝒪((N-1)!))'}
+            {mode === 'post' && 'Metode: Peningkatan (Multi-Target Batch Scan + Dynamic Programming Held-Karp 𝒪(N² · 2ᴺ))'}
             {mode === 'normal' && 'Pilih mode algoritma untuk menampilkan rute & perbandingan.'}
           </p>
           {mode !== 'normal' && viz && (
@@ -849,15 +842,9 @@ export default function App() {
                   );
                 })}
               </div>
-              {mode === 'post' && (
-                <div className="wave-legend">
-                  <span className="wave-pill"><span className="wave-dot" style={{ background: '#06b6d4' }}></span> Maju (Dapur)</span>
-                  <span className="wave-pill"><span className="wave-dot" style={{ background: '#d946ef' }}></span> Mundur (Sekolah)</span>
-                </div>
-              )}
               <p className="note">
-                {viz.orderCoords.length.toLocaleString('id-ID')} simpul dievaluasi untuk {targets.length} tujuan
-                {mode === 'pre' ? ' (pencarian satu arah konvensional)' : ' (dua arah bertemu di tengah)'}.
+                {viz.orderCoords.length.toLocaleString('id-ID')} simpul dikunjungi untuk {targets.length} tujuan
+                {mode === 'pre' ? ' (dicari terpisah satu per satu / naif)' : ' (dicari sekaligus dalam 1 sapuan gelombang)'}.
               </p>
             </div>
           )}
@@ -1009,202 +996,193 @@ export default function App() {
       </aside>
 
       <div className="map-wrap">
-      <MapContainer
-        center={[places[0].lat, places[0].lng]}
-        zoom={14}
-        style={{ height: '100%', width: '100%' }}
-      >
-        <TileLayer
-          url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-          attribution="&copy; OpenStreetMap contributors"
-        />
-        <FlyTo target={flyTarget} />
-        <ClickHandler active={mapMode !== 'none'} onClick={onMapClick} />
-
-        {mode !== 'normal' && showNaive && (
-          <Polyline
-            positions={current.naiveLine}
-            pathOptions={{ color: '#666', weight: 3, dashArray: '6 8', opacity: 0.8 }}
+        <MapContainer
+          center={[places[0].lat, places[0].lng]}
+          zoom={14}
+          style={{ height: '100%', width: '100%' }}
+        >
+          <TileLayer
+            url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+            attribution="&copy; OpenStreetMap contributors"
           />
-        )}
+          <FlyTo target={flyTarget} />
+          <ClickHandler active={mapMode !== 'none'} onClick={onMapClick} />
 
-        {mode !== 'normal' && legParts.map((p, k) => (
-          <Polyline key={'c' + k} positions={p.points} pathOptions={{ color: '#fff', weight: 9, opacity: 0.9 }} />
-        ))}
-        {mode !== 'normal' && legParts.map((p, k) => (
-          <Polyline key={'l' + k} positions={p.points} pathOptions={{ color: p.color, weight: 5 }} />
-        ))}
-
-        {/* Palang jalan: garis melintang merah-putih di ruas yang ditutup */}
-        {blockages.map((b, k) => (
-          <Polyline key={'bo' + b.id} positions={b.ends} pathOptions={{ color: '#1f2937', weight: 12, lineCap: 'butt' }}>
-            <Tooltip>Blokade {k + 1}</Tooltip>
-          </Polyline>
-        ))}
-        {blockages.map(b => (
-          <Polyline key={'br' + b.id} positions={b.ends} pathOptions={{ color: '#dc2626', weight: 8, lineCap: 'butt', interactive: false }} />
-        ))}
-        {blockages.map(b => (
-          <Polyline key={'bw' + b.id} positions={b.ends} pathOptions={{ color: '#fff', weight: 8, dashArray: '7 7', lineCap: 'butt', interactive: false }} />
-        ))}
-
-        {mode !== 'normal' && viz && (
-          <>
-            <FitBounds bounds={viz.bounds} />
-            <SearchLayer
-              coords={viz.orderCoords}
-              parents={viz.parentCoords}
-              step={dijkStep}
-              color={viz.color || (mode === 'pre' ? '#f97316' : '#06b6d4')}
+          {mode !== 'normal' && showNaive && (
+            <Polyline
+              positions={current.naiveLine}
+              pathOptions={{ color: '#666', weight: 3, dashArray: '6 8', opacity: 0.8 }}
             />
-            {dijkStep >= viz.orderCoords.length && (
-              <>
-                {viz.routes.map(
-                  (r, k) =>
-                    r.found && (
-                      <Polyline key={'dc' + k} positions={r.latlngs} pathOptions={{ color: '#fff', weight: 10, opacity: 0.95 }} />
-                    )
-                )}
-                {viz.routes.map(
-                  (r, k) =>
-                    r.found && (
-                      <Polyline key={'dr' + k} positions={r.latlngs} pathOptions={{ color: djColor(k), weight: 6 }} />
-                    )
-                )}
-                <CarMarker key={replay + '|' + mode + '|' + objective} routes={current?.legs && current.legs.length > 0 ? current.legs.map(pts => ({ found: true, latlngs: pts })) : viz.routes} />
-              </>
-            )}
-          </>
-        )}
+          )}
 
-        {places.map((p, i) => {
-          const pos = route.indexOf(i);
-          let icon;
-          if (mode !== 'normal') {
-            icon =
-              i === 0
-                ? pin('D', 'kitchen', false)
-                : targets.includes(i)
-                  ? pin(targets.indexOf(i) + 1, 'school', false, djColor(targets.indexOf(i)))
-                  : pin('', 'school', false, '#6b7280');
-          } else if (i === 0) icon = pin('D', 'kitchen', active === 0);
-          else if (pos === -1) icon = pin('×', 'school', active === i, '#6b7280');
-          else icon = pin(pos, 'school', active === i, legColor(pos - 1, totalLegs));
-          return (
-            <Marker
-              key={i}
-              position={[p.lat, p.lng]}
-              icon={icon}
-              draggable={mode === 'normal'}
-              eventHandlers={{
-                click: () => setActive(i),
-                dragend: e => moveLocation(i, e.target.getLatLng()),
-              }}
-            >
-              <Tooltip>{p.name}</Tooltip>
-            </Marker>
-          );
-        })}
-      </MapContainer>
+          {/* Palang jalan: garis melintang merah-putih di ruas yang ditutup */}
+          {blockages.map((b, k) => (
+            <Polyline key={'bo' + b.id} positions={b.ends} pathOptions={{ color: '#1f2937', weight: 12, lineCap: 'butt' }}>
+              <Tooltip>Blokade {k + 1}</Tooltip>
+            </Polyline>
+          ))}
+          {blockages.map(b => (
+            <Polyline key={'br' + b.id} positions={b.ends} pathOptions={{ color: '#dc2626', weight: 8, lineCap: 'butt', interactive: false }} />
+          ))}
+          {blockages.map(b => (
+            <Polyline key={'bw' + b.id} positions={b.ends} pathOptions={{ color: '#fff', weight: 8, dashArray: '7 7', lineCap: 'butt', interactive: false }} />
+          ))}
 
+          {mode !== 'normal' && viz && (
+            <>
+              <FitBounds bounds={viz.bounds} />
+              <SearchLayer
+                coords={viz.orderCoords}
+                parents={viz.parentCoords}
+                step={dijkStep}
+                color={viz.color || (mode === 'pre' ? '#f97316' : '#06b6d4')}
+              />
+              {dijkStep >= viz.orderCoords.length && (
+                <>
+                  {legParts.map((p, k) => (
+                    <Polyline key={'c' + k} positions={p.points} pathOptions={{ color: '#fff', weight: 9, opacity: 0.9 }} />
+                  ))}
+                  {legParts.map((p, k) => (
+                    <Polyline key={'l' + k} positions={p.points} pathOptions={{ color: p.color, weight: 5 }} />
+                  ))}
+                  <CarMarker
+                    key={replay + '|' + mode + '|' + objective + '|' + (mode === 'pre' ? runNoncePre : runNoncePost)}
+                    routes={current?.legs?.map(pts => ({ found: true, latlngs: pts })) || []}
+                  />
+                </>
+              )}
+            </>
+          )}
+
+          {places.map((p, i) => {
+            const pos = route.indexOf(i);
+            let icon;
+            if (mode !== 'normal') {
+              icon =
+                i === 0
+                  ? pin('D', 'kitchen', false)
+                  : targets.includes(i)
+                    ? pin(targets.indexOf(i) + 1, 'school', false, djColor(targets.indexOf(i)))
+                    : pin('', 'school', false, '#6b7280');
+            } else if (i === 0) icon = pin('D', 'kitchen', active === 0);
+            else if (pos === -1) icon = pin('×', 'school', active === i, '#6b7280');
+            else icon = pin(pos, 'school', active === i, legColor(pos - 1, totalLegs));
+            return (
+              <Marker
+                key={i}
+                position={[p.lat, p.lng]}
+                icon={icon}
+                draggable={mode === 'normal'}
+                eventHandlers={{
+                  click: () => setActive(i),
+                  dragend: e => moveLocation(i, e.target.getLatLng()),
+                }}
+              >
+                <Tooltip>{p.name}</Tooltip>
+              </Marker>
+            );
+          })}
+        </MapContainer>
       </div>
 
       <aside className="side-right">
-      <div className="side-card">
-        <div className="dock-head">
-          <b>Perbandingan Kompleksitas</b>
-          <span>{objective === 'dist' ? 'Jarak' : 'Waktu'}</span>
+        <div className="side-card">
+          <div className="dock-head">
+            <b>Perbandingan Kompleksitas</b>
+            <span>{objective === 'dist' ? 'Jarak' : 'Waktu'}</span>
+          </div>
+          <p className="note" style={{ margin: '0 0 8px' }}>
+            Evaluasi modifikasi algoritma graf & optimasi rute MBG:
+          </p>
+          <div className="dock-row head">
+            <span />
+            <span>Simpul</span>
+            <span>Waktu</span>
+          </div>
+          <div className="dock-row">
+            <span>
+              <b>Baseline</b>
+              <br />
+              <small style={{ color: 'var(--mute)', fontSize: 10 }}>Dijkstra Naif (Pairwise) + Brute Force</small>
+            </span>
+            <span>{planPre ? num(planPre.result[objective].stats.visited) : 0}</span>
+            <span>{planPre ? planPre.result[objective].stats.totalTime.toFixed(2) + ' ms' : '0.00'}</span>
+          </div>
+          <div className="dock-row">
+            <span>
+              <b>Peningkatan</b>
+              <br />
+              <small style={{ color: 'var(--mute)', fontSize: 10 }}>Batch Scan (Multi-Target) + Held-Karp DP</small>
+            </span>
+            <span>{planPost ? num(planPost.result[objective].stats.visited) : 0}</span>
+            <span>{planPost ? planPost.result[objective].stats.totalTime.toFixed(2) + ' ms' : '0.00'}</span>
+          </div>
+          <p className="dock-note">
+            {planPre && planPost ? (
+              <>
+                {(() => {
+                  const preV = planPre.result[objective].stats.visited;
+                  const postV = planPost.result[objective].stats.visited;
+                  const preCost = planPre.result[objective].cost;
+                  const postCost = planPost.result[objective].cost;
+                  const costGap = preCost > 0 ? (postCost - preCost) / preCost : 0;
+                  return (
+                    <>
+                      • <b>Simpul Traversal:</b> Berkurang <b>{reduction(postV, preV)}</b> karena sapuan gelombang multi-target mengeliminasi pemindaian berulang di jalan sekitar dapur.
+                      <br />
+                      • <b>Frekuensi Eksekusi:</b> Dipangkas dari <b>N(N-1) kali</b> menjadi cukup <b>N kali</b> pemanggilan graf.
+                      <br />
+                      • <b>Optimasi TSP:</b> Dynamic Programming memangkas ordo dari <b>𝒪((N-1)!)</b> ke <b>𝒪(N² · 2ᴺ)</b>.
+                      <br />
+                      • <b>Optimalitas:</b> {costGap < 1e-9 ? 'Kedua metode menghasilkan jarak rute 100% identik optimal.' : 'Jarak rute optimal terkonfirmasi.'}
+                    </>
+                  );
+                })()}
+              </>
+            ) : (
+              'Pilih Baseline atau Peningkatan untuk melihat perbandingan.'
+            )}
+          </p>
         </div>
-        <p className="note" style={{ margin: '0 0 8px' }}>
-          Evaluasi modifikasi algoritma graf & optimasi rute MBG:
-        </p>
-        <div className="dock-row head">
-          <span />
-          <span>Simpul</span>
-          <span>Waktu</span>
-        </div>
-        <div className="dock-row">
-          <span>
-            <b>Pre-Peningkatan</b>
-            <br />
-            <small style={{ color: 'var(--mute)', fontSize: 10 }}>Dijkstra Satu Arah + Brute Force</small>
-          </span>
-          <span>{planPre ? num(planPre.result[objective].stats.visited) : 0}</span>
-          <span>{planPre ? planPre.result[objective].stats.totalTime.toFixed(2) + ' ms' : '0.00'}</span>
-        </div>
-        <div className="dock-row">
-          <span>
-            <b>Peningkatan</b>
-            <br />
-            <small style={{ color: 'var(--mute)', fontSize: 10 }}>Bidirectional + Held-Karp DP</small>
-          </span>
-          <span>{planPost ? num(planPost.result[objective].stats.visited) : 0}</span>
-          <span>{planPost ? planPost.result[objective].stats.totalTime.toFixed(2) + ' ms' : '0.00'}</span>
-        </div>
-        <p className="dock-note">
-          {planPre && planPost ? (
-            <>
-              {(() => {
-                const preV = planPre.result[objective].stats.visited;
-                const postV = planPost.result[objective].stats.visited;
-                const preCost = planPre.result[objective].cost;
-                const postCost = planPost.result[objective].cost;
-                const costGap = preCost > 0 ? (postCost - preCost) / preCost : 0;
-                return (
-                  <>
-                    • <b>Simpul Traversal:</b> Berkurang <b>{reduction(postV, preV)}</b> karena dua lingkaran ekspansi radius R/2 hanya mencakup setengah luas lingkaran radius R (½πR² vs πR²).
-                    <br />
-                    • <b>Optimasi TSP:</b> Dynamic Programming memangkas ordo dari <b>𝒪((N-1)!)</b> ke <b>𝒪(N² · 2ᴺ)</b>.
-                    <br />
-                    • <b>Optimalitas:</b> {costGap < 1e-9 ? 'Kedua metode menghasilkan jarak rute 100% identik optimal.' : 'Jarak rute optimal terkonfirmasi.'}
-                  </>
-                );
-              })()}
-            </>
-          ) : (
-            'Pilih Pre-Peningkatan atau Peningkatan untuk melihat perbandingan.'
-          )}
-        </p>
-      </div>
 
-      <div className="side-card" style={{ marginTop: 12 }}>
-        <div className="dock-head">
-          <b>Rincian Modifikasi Algoritma</b>
+        <div className="side-card" style={{ marginTop: 12 }}>
+          <div className="dock-head">
+            <b>Rincian Modifikasi Algoritma</b>
+          </div>
+          <div className="ex-box" style={{ marginTop: 6 }}>
+            <div className="ex-row">
+              <span><b>Komponen</b></span>
+              <span><b>Baseline → Peningkatan</b></span>
+            </div>
+            <div className="ex-row">
+              <span>Shortest Path</span>
+              <span>Dijkstra Naif (Pairwise) → Multi-Target Batch Scan</span>
+            </div>
+            <div className="ex-row">
+              <span>Frekuensi Pencarian</span>
+              <span>N(N-1) kali → N kali (Hemat 75%+)</span>
+            </div>
+            <div className="ex-row">
+              <span>Penanganan Target</span>
+              <span>1 per 1 (Redundan) → Sekaligus (Early Stopping)</span>
+            </div>
+            <div className="ex-row">
+              <span>Penentu Urutan</span>
+              <span>Brute Force → Held-Karp DP</span>
+            </div>
+            <div className="ex-row">
+              <span>Kompleksitas TSP</span>
+              <span>𝒪((N-1)!) → 𝒪(N² · 2ᴺ)</span>
+            </div>
+          </div>
+          <p className="note" style={{ marginTop: 8, lineHeight: 1.5 }}>
+            <b>Keunggulan Ilmiah Modifikasi:</b>
+            <br />
+            1. <b>Multi-Target Batch Scan Dijkstra:</b> Memanfaatkan sifat alami <i>Single-Source Shortest Path (SSSP)</i>. Dari satu titik asal, satu gelombang ekspansi memantau seluruh sekolah tujuan secara simultan. Begitu semua sekolah terjamah, pencarian langsung berhenti seketika (<i>Early Stopping</i>), menghemat ribuan simpul redundan.
+            <br />
+            2. <b>Held-Karp Dynamic Programming:</b> Memanfaatkan relasi rekurensi Bellman dengan representasi <i>bitmask</i>, menjamin rute global optimal tanpa harus menguji jutaan permutasi faktorial.
+          </p>
         </div>
-        <div className="ex-box" style={{ marginTop: 6 }}>
-          <div className="ex-row">
-            <span><b>Komponen</b></span>
-            <span><b>Pre → Peningkatan</b></span>
-          </div>
-          <div className="ex-row">
-            <span>Shortest Path</span>
-            <span>Dijkstra Satu Arah → Bidirectional</span>
-          </div>
-          <div className="ex-row">
-            <span>Arah Ekspansi</span>
-            <span>1 Arah (Maju) → 2 Arah (Maju & Mundur)</span>
-          </div>
-          <div className="ex-row">
-            <span>Area Pencarian</span>
-            <span>πR² → 2 × π(R/2)² = ½πR² (Hemat ~50%)</span>
-          </div>
-          <div className="ex-row">
-            <span>Penentu Urutan</span>
-            <span>Brute Force → Held-Karp DP</span>
-          </div>
-          <div className="ex-row">
-            <span>Kompleksitas TSP</span>
-            <span>𝒪((N-1)!) → 𝒪(N² · 2ᴺ)</span>
-          </div>
-        </div>
-        <p className="note" style={{ marginTop: 8, lineHeight: 1.5 }}>
-          <b>Keunggulan Ilmiah Modifikasi:</b>
-          <br />
-          1. <b>Bidirectional Dijkstra:</b> Mengekspansi simpul secara simultan dari titik asal (Cyan) dan titik tujuan (Magenta). Begitu kriteria terminasi optimal \(d_F + d_B \ge \mu\) terpenuhi di titik temu tengah, pencarian langsung berhenti tanpa perlu menjelajahi seluruh peta.
-          <br />
-          2. <b>Held-Karp Dynamic Programming:</b> Mengeliminasi pengujian permutasi berulang dengan memecah TSP menjadi subproblem menggunakan representasi <i>bitmask</i>, menjamin rute global optimal tanpa komputasi faktorial.
-        </p>
-      </div>
       </aside>
     </div>
   );
