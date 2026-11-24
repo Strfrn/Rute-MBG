@@ -450,3 +450,36 @@
 .ex-box { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 13px; font-variant-numeric: tabular-nums; }
 .ex-row { display: flex; justify-content: space-between; gap: 10px; }
 .ex-row span:last-child { text-align: right; }
+
+/* ---------- Blockade Badge Marker ---------- */
+.blockage-badge {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.65));
+  cursor: pointer;
+  animation: blockagePulse 2.5s infinite ease-in-out;
+}
+.blockage-badge svg {
+  display: block;
+}
+.blockage-badge-tag {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  background: #ffffff;
+  color: #dc2626;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-weight: 800;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 999px;
+  border: 1.5px solid #dc2626;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+@keyframes blockagePulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.12); }
+}

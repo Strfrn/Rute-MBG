@@ -3,7 +3,7 @@ const kxAt = lat => Math.cos((lat * Math.PI) / 180) * 111320; // meter per deraj
 
 // Cari ruas jalan terdekat dari titik klik, lalu buat "palang" yang melintang di jalan itu.
 // Mengembalikan null kalau tidak ada jalan dalam jarak maxDist (meter).
-export function makeBlockage(adj, coords, ll, maxDist = 30, halfWidth = 8) {
+export function makeBlockage(adj, coords, ll, maxDist = 30, halfWidth = 14) {
   const kx = kxAt(ll.lat);
   let best = null;
 

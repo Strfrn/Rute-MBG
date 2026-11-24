@@ -86,6 +86,25 @@ function pin(label, kind, active, color) {
   });
 }
 
+// Ikon tanda blokade jalan (rambu stop / no-entry merah besar)
+function makeBlockagePin(label) {
+  return L.divIcon({
+    className: '',
+    html: `
+      <div class="blockage-badge" title="Blokade ${label}">
+        <svg viewBox="0 0 36 36" width="38" height="38">
+          <circle cx="18" cy="18" r="16" fill="#dc2626" stroke="#ffffff" stroke-width="2.5" />
+          <rect x="7" y="15" width="22" height="6" rx="2" fill="#ffffff" />
+          <text x="18" y="27" font-size="8.5" font-weight="900" fill="#ffffff" text-anchor="middle" font-family="system-ui, sans-serif">BLOKADE</text>
+        </svg>
+        <span class="blockage-badge-tag">${label}</span>
+      </div>
+    `,
+    iconSize: [40, 40],
+    iconAnchor: [20, 20],
+  });
+}
+
 // Hitung rute terbaik untuk kondisi blokade tertentu.
 // Memilih mode algoritma:
 // - 'pre': Baseline (Dijkstra Naif Pairwise + Brute Force O((N-1)!))
@@ -1270,17 +1289,24 @@ export default function App() {
             />
           )}
 
-          {/* Palang jalan: garis melintang merah-putih di ruas yang ditutup */}
+          {/* Palang jalan: garis melintang merah-putih tebal & mencolok di ruas yang ditutup */}
           {blockages.map((b, k) => (
-            <Polyline key={'bo' + b.id} positions={b.ends} pathOptions={{ color: '#1f2937', weight: 12, lineCap: 'butt' }}>
+            <Polyline key={'bo' + b.id} positions={b.ends} pathOptions={{ color: '#0f172a', weight: 18, lineCap: 'round' }}>
               <Tooltip>Blokade {k + 1}</Tooltip>
             </Polyline>
           ))}
           {blockages.map(b => (
-            <Polyline key={'br' + b.id} positions={b.ends} pathOptions={{ color: '#dc2626', weight: 8, lineCap: 'butt', interactive: false }} />
+            <Polyline key={'br' + b.id} positions={b.ends} pathOptions={{ color: '#dc2626', weight: 12, lineCap: 'round', interactive: false }} />
           ))}
           {blockages.map(b => (
-            <Polyline key={'bw' + b.id} positions={b.ends} pathOptions={{ color: '#fff', weight: 8, dashArray: '7 7', lineCap: 'butt', interactive: false }} />
+            <Polyline key={'bw' + b.id} positions={b.ends} pathOptions={{ color: '#fff', weight: 12, dashArray: '8 8', lineCap: 'butt', interactive: false }} />
+          ))}
+
+          {/* Ikon rambu blokade besar di tengah ruas */}
+          {blockages.map((b, k) => (
+            <Marker key={'bm' + b.id} position={[b.lat, b.lng]} icon={makeBlockagePin(k + 1)}>
+              <Tooltip>Blokade {k + 1} (Jalan Ditutup)</Tooltip>
+            </Marker>
           ))}
 
           {mode !== 'normal' && viz && (
