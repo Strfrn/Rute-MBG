@@ -1,0 +1,69 @@
+{
+  "kitchen": {
+    "name": "SPPG Cinere 2 Depok",
+    "lat": -6.318258752645782,
+    "lng": 106.7975535594394
+  },
+  "schools": [
+    {
+      "id": 1,
+      "name": "SD Keluarga Widuri",
+      "lat": -6.3043,
+      "lng": 106.7882
+    },
+    {
+      "id": 2,
+      "name": "SDN Pondok Labu 16 Pagi",
+      "lat": -6.3045,
+      "lng": 106.7929
+    },
+    {
+      "id": 3,
+      "name": "SDN Pondok Labu 03",
+      "lat": -6.3052,
+      "lng": 106.7908
+    },
+    {
+      "id": 4,
+      "name": "SDN Pondok Labu 02 Pagi",
+      "lat": -6.3081,
+      "lng": 106.7955
+    },
+    {
+      "id": 5,
+      "name": "SD Islam Al-Izhar Pondok Labu",
+      "lat": -6.3101,
+      "lng": 106.7923
+    },
+    {
+      "id": 6,
+      "name": "SMP Negeri 85 Jakarta",
+      "lat": -6.3126,
+      "lng": 106.7952
+    },
+    {
+      "id": 7,
+      "name": "SMA Negeri 34 Jakarta",
+      "lat": -6.3134,
+      "lng": 106.7949
+    },
+    {
+      "id": 8,
+      "name": "SMK Negeri 41 Jakarta",
+      "lat": -6.3138,
+      "lng": 106.8025
+    },
+    {
+      "id": 9,
+      "name": "SDN 12 Pondok Labu",
+      "lat": -6.3141,
+      "lng": 106.8047
+    },
+    {
+      "id": 10,
+      "name": "SD Negeri Cinere 1",
+      "lat": -6.3363,
+      "lng": 106.7820
+    }
+  ]
+}

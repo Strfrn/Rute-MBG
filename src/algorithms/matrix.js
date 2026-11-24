@@ -1,4 +1,4 @@
-import { dijkstraTrace } from './dijkstra.js';
+import { dijkstraTrace, dijkstraBatchCosts } from './dijkstra.js';
 import { bidirectionalDijkstra, buildReverseAdj } from './bidirectional.js';
 
 // 1. Baseline: Dijkstra Satu Arah Standar (Unidirectional Pairwise)
@@ -63,15 +63,14 @@ export function buildMatrixBatchDijkstra(adj, nodeIds, weightKey) {
       if (i !== j) targets.push(nodeIds[j]);
     }
 
-    // 1 kali scan langsung menjangkau semua target (dengan early stopping saat semua terjamah)
-    const res = dijkstraTrace(adj, nodeIds[i], targets, weightKey);
+    // 1 kali scan langsung menjangkau semua target dengan komputasi murni (Zero-Trace Overhead)
+    const res = dijkstraBatchCosts(adj, nodeIds[i], targets, weightKey);
 
     for (let j = 0; j < n; j++) {
       if (i === j) {
         matrix[i][j] = 0;
       } else {
-        const item = res.results.find(r => r.target === nodeIds[j]);
-        matrix[i][j] = item && item.found ? item.cost : Infinity;
+        matrix[i][j] = res.cost.has(nodeIds[j]) ? res.cost.get(nodeIds[j]) : Infinity;
       }
     }
 

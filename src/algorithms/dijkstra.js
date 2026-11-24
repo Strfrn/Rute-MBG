@@ -64,6 +64,42 @@ export function dijkstra(adj, start, weightKey, targets = []) {
   return { cost, prev };
 }
 
+// Fungsi komputasi murni Dijkstra Multi-Target (Zero-Trace Overhead):
+// Murni menghitung biaya numerik tanpa mencatat jejak urutan simpul/garis untuk animasi.
+// Mengurangi alokasi memori dan mempercepat pembentukan matriks jarak secara signifikan.
+export function dijkstraBatchCosts(adj, start, targets, weightKey) {
+  const cost = new Map([[start, 0]]);
+  const done = new Set();
+  const remaining = new Set(targets);
+  const heap = new MinHeap();
+  heap.push([0, start]);
+  let pushes = 1, pops = 0, examined = 0, relaxed = 0;
+
+  while (heap.size) {
+    const [c, u] = heap.pop();
+    pops++;
+    if (done.has(u)) continue;
+    done.add(u);
+
+    if (remaining.has(u)) {
+      remaining.delete(u);
+      if (remaining.size === 0) break;
+    }
+
+    for (const e of adj.get(u) || []) {
+      examined++;
+      const nc = c + e[weightKey];
+      if (nc < (cost.get(e.to) ?? Infinity)) {
+        cost.set(e.to, nc);
+        heap.push([nc, e.to]);
+        relaxed++;
+        pushes++;
+      }
+    }
+  }
+  return { cost, stats: { visited: done.size, pushes, pops, examined, relaxed } };
+}
+
 // Dijkstra yang sama persis, tapi mencatat urutan simpul yang selesai diproses
 // beserta simpul induknya (untuk menggambar garis pencarian).
 // targets = daftar tujuan; pencarian berhenti setelah semua tujuan ditemukan.
