@@ -157,6 +157,28 @@
 .dj-target .leg { font-size: 12px; color: var(--mute); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .dj-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; }
 
+.wave-legend {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--mute);
+  padding: 5px 8px;
+  background: var(--well);
+  border-radius: 6px;
+  margin-top: 4px;
+}
+.wave-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.wave-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
 /* Saat mode Dijkstra aktif, peta dibuat abu-abu supaya warna pencarian lebih menonjol */
 .dj-mode .leaflet-tile-pane { filter: grayscale(1) brightness(1.06) contrast(0.92); }
 

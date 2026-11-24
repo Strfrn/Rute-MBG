@@ -18,7 +18,7 @@ export function routeToLegs(adj, coords, nodes, route, key) {
   return legs;
 }
 
-// Versi lama: semua perjalanan disambung jadi satu garis
+// Semua perjalanan disambung jadi satu garis
 export function routeToCoords(adj, coords, nodes, route, key) {
   return routeToLegs(adj, coords, nodes, route, key).flat();
 }
