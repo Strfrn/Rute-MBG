@@ -27,7 +27,7 @@ function legColor(k, total) {
   return `hsl(${(k * 137.5) % 360} 65% 42%)`;
 }
 
-const STORE_KEY = 'mbg-data-v2'; // kunci penyimpanan data lokasi di browser
+const STORE_KEY = 'mbg-data-v3'; // kunci penyimpanan data lokasi di browser
 const MAX_SCHOOLS = 10; // batas brute force (10 sekolah + 1 dapur = 11 lokasi)
 
 // Warna jalur hasil Dijkstra (dibuat beda dari warna pencarian)
@@ -655,7 +655,7 @@ export default function App() {
       try {
         saved = JSON.parse(localStorage.getItem(STORE_KEY));
       } catch (e) { }
-      const ok = saved && saved.kitchen && Array.isArray(saved.schools) && saved.schools.length === 5;
+      const ok = saved && saved.kitchen && Array.isArray(saved.schools) && saved.schools.length === 4;
       setScenarioFiles({ s1: file1, s2: file2 });
       setFileData(file1);
       setData(ok ? saved : file1);
@@ -732,10 +732,10 @@ export default function App() {
 
   const current = plan ? plan.result[objective] : null;
 
-  // Sekolah tujuan untuk visualisasi pencarian (default: 3 sekolah pertama pada rute)
+  // Sekolah tujuan untuk visualisasi pencarian (default: semua sekolah pada rute, maksimal 6)
   const defaultTargets = useMemo(() => {
     if (!plan) return [1];
-    const stops = plan.result[objective].route.slice(1, -1).slice(0, 3);
+    const stops = plan.result[objective].route.slice(1, -1).slice(0, 6);
     return stops.length ? stops : [1];
   }, [plan, objective]);
   const targets = dijkTargets ?? defaultTargets;
@@ -1022,10 +1022,10 @@ export default function App() {
             <button
               className={'scenario-btn' + (scenario === 's1' ? ' on' : '')}
               onClick={() => handleScenario('s1')}
-              title="Skenario 1: 5 sekolah (N=6) — rute standar MBG"
+              title="Skenario 1: 4 sekolah (N=5) — skala kecil"
             >
               Skenario 1<br />
-              <span>5 Sekolah · N=6</span>
+              <span>4 Sekolah · N=5</span>
             </button>
             <button
               className={'scenario-btn' + (scenario === 's2' ? ' on' : '')}
