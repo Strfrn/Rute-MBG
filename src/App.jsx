@@ -756,12 +756,12 @@ export default function App() {
           </div>
           {scenario === 's1' && (
             <p className="note" style={{ marginTop: 6, color: '#38bdf8', fontSize: 11 }}>
-              💡 Kasus basis (Single Target): 1 sekolah saja (1! = 1 rute), rute langsung pulang-pergi tanpa optimasi permutasi.
+              Kasus basis (Single Target): 1 sekolah saja (1! = 1 rute), rute langsung pulang-pergi tanpa optimasi permutasi.
             </p>
           )}
           {scenario === 's3' && (
             <p className="note" style={{ marginTop: 6, color: '#38bdf8', fontSize: 11 }}>
-              💡 Skenario skala penuh: Evaluasi 10! = 3.628.800 permutasi Brute Force.
+              Skenario skala penuh: Evaluasi 10! = 3.628.800 permutasi Brute Force.
             </p>
           )}
         </header>
