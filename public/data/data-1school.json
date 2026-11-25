@@ -1,0 +1,15 @@
+{
+  "kitchen": {
+    "name": "SPPG Cinere 2 Depok",
+    "lat": -6.318258752645782,
+    "lng": 106.7975535594394
+  },
+  "schools": [
+    {
+      "id": 1,
+      "name": "SD Keluarga Widuri",
+      "lat": -6.3043,
+      "lng": 106.7882
+    }
+  ]
+}

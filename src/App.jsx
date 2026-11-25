@@ -6,14 +6,12 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './App.css';
 import { buildGraph, haversine } from './algorithms/graph.js';
-import { runBenchmark, toMarkdownTable, toCsv } from './algorithms/benchmark.js';
 import { largestComponent, snapPoint } from './algorithms/snap.js';
-import { buildMatrix, buildMatrixNaiveDijkstra, buildMatrixBatchDijkstra, buildMatrixBidirectionalDijkstra } from './algorithms/matrix.js';
-import { bruteForce, heldKarp, naiveRoute, nearestNeighbor, routeCost } from './algorithms/route.js';
+import { buildMatrix, buildMatrixNaiveDijkstra } from './algorithms/matrix.js';
+import { bruteForce, naiveRoute, nearestNeighbor, routeCost } from './algorithms/route.js';
 import { routeToCoords, routeToLegs } from './algorithms/roadPath.js';
 import { applyBlockages, makeBlockage } from './algorithms/blockage.js';
 import { dijkstra, dijkstraTrace } from './algorithms/dijkstra.js';
-import { buildReverseAdj, bidirectionalDijkstra, bidirectionalDijkstraTrace } from './algorithms/bidirectional.js';
 
 const LEG_COLORS = [
   '#2563eb', '#ea580c', '#16a34a', '#7c3aed',
@@ -27,7 +25,7 @@ function legColor(k, total) {
   return `hsl(${(k * 137.5) % 360} 65% 42%)`;
 }
 
-const STORE_KEY = 'mbg-data-v3'; // kunci penyimpanan data lokasi di browser
+const STORE_KEY = 'mbg-data-v4'; // kunci penyimpanan data lokasi di browser
 const MAX_SCHOOLS = 10; // batas brute force (10 sekolah + 1 dapur = 11 lokasi)
 
 // Warna jalur hasil Dijkstra (dibuat beda dari warna pencarian)
@@ -105,24 +103,16 @@ function makeBlockagePin(label) {
   });
 }
 
-// Hitung rute terbaik untuk kondisi blokade tertentu.
-// Memilih mode algoritma:
-// - 'pre': Baseline (Dijkstra Naif Pairwise + Brute Force O((N-1)!))
-// - 'post': Peningkatan (Multi-Target Batch Scan + Dynamic Programming Held-Karp O(N² · 2ᴺ))
-function solve(base, blockages, mode = 'post') {
+// Hitung rute terbaik untuk kondisi blokade tertentu (Baseline: Dijkstra Naif Pairwise + Brute Force TSP).
+function solve(base, blockages) {
   const { g, places, nodes } = base;
   const adj = applyBlockages(g.adj, g.coords, blockages);
   const result = {};
   let unreachable = [];
 
   for (const key of ['dist', 'time']) {
-    let matrixRes;
     const t0 = performance.now();
-    if (mode === 'pre') {
-      matrixRes = buildMatrixNaiveDijkstra(adj, nodes, key);
-    } else {
-      matrixRes = buildMatrixBatchDijkstra(adj, nodes, key);
-    }
+    const matrixRes = buildMatrixNaiveDijkstra(adj, nodes, key);
     const matrixTime = performance.now() - t0;
     const full = matrixRes.matrix;
 
@@ -132,21 +122,14 @@ function solve(base, blockages, mode = 'post') {
       .filter(i => i === 0 || (full[0][i] < Infinity && full[i][0] < Infinity));
     const sub = idx.map(i => idx.map(j => full[i][j]));
 
-    // TSP Solver:
-    // Baseline: Brute Force Faktorial O((N-1)!) — hingga N=11 (10 sekolah: 10! = 3.628.800 permutasi ~360ms)
-    // Peningkatan: Dynamic Programming Held-Karp O(N² · 2ᴺ)
+    // TSP Solver: Baseline Brute Force Faktorial O((N-1)!)
     const tTsp0 = performance.now();
-    let route;
-    if (mode === 'pre') {
-      route = (sub.length <= 11 ? bruteForce(sub) : nearestNeighbor(sub)).map(k => idx[k]);
-    } else {
-      route = heldKarp(sub).map(k => idx[k]);
-    }
+    const route = (sub.length <= 11 ? bruteForce(sub) : nearestNeighbor(sub)).map(k => idx[k]);
     const tspTime = performance.now() - tTsp0;
     const naive = naiveRoute(idx.length).map(k => idx[k]);
 
     result[key] = {
-      mode,
+      mode: 'pre',
       matrix: full,
       route,
       cost: routeCost(full, route),
@@ -446,205 +429,11 @@ function FitBounds({ bounds }) {
   return null;
 }
 
-// ─── Benchmark Modal ────────────────────────────────────────────────────────
-function BenchmarkModal({ base, blockages, objective, onClose }) {
-  // phase: 'idle' | 'running' | 'done'
-  const [phase, setPhase] = useState('idle');
-  const [progress, setProgress] = useState({ phase: '', done: 0, total: 1 });
-  const [result, setResult] = useState(null);
-  const [copied, setCopied] = useState(false);
-  const RUNS = 20;
-
-  const start = async () => {
-    setPhase('running');
-    setResult(null);
-    setCopied(false);
-    try {
-      const r = await runBenchmark(base, blockages, objective, RUNS, prog => {
-        setProgress({ ...prog });
-      });
-      setResult(r);
-      setPhase('done');
-    } catch (e) {
-      console.error(e);
-      setPhase('idle');
-    }
-  };
-
-  const copyMd = () => {
-    navigator.clipboard.writeText(toMarkdownTable(result)).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  };
-
-  const downloadCsv = () => {
-    const blob = new Blob([toCsv(result)], { type: 'text/csv' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `benchmark-mbg-${objective}-${RUNS}runs.csv`;
-    a.click();
-  };
-
-  const f = ms => ms.toFixed(3);
-
-  // Progress bar width helper
-  const pct = (done, total) => Math.round((done / Math.max(total, 1)) * 100);
-
-  // Phase label for progress display
-  const phaseLabel = {
-    warmup: 'Warm-up JIT',
-    baseline: `Baseline (${RUNS} run)`,
-    peningkatan: `Peningkatan (${RUNS} run)`,
-  };
-
-  return (
-    <div className="bm-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="bm-modal">
-        <div className="bm-head">
-          <b>Benchmark Otomatis</b>
-          <button className="bm-close" onClick={onClose}>✕</button>
-        </div>
-
-        <p className="note" style={{ margin: '0 0 12px' }}>
-          Setiap algoritma dijalankan <b>{RUNS}×</b> berturut-turut (+ 2× warm-up JIT, tidak dihitung).
-          Peta & animasi dinonaktifkan selama pengujian agar hasil murni komputasi.
-        </p>
-
-        {phase === 'idle' && (
-          <button className="bm-run-btn" onClick={start}>
-            ▶ Mulai Benchmark ({RUNS}× per algoritma)
-          </button>
-        )}
-
-        {phase === 'running' && (
-          <div className="bm-progress">
-            <p className="bm-phase-label">{phaseLabel[progress.phase] ?? '...'}</p>
-            <div className="bm-bar-track">
-              <div
-                className="bm-bar-fill"
-                style={{ width: pct(progress.done, progress.total) + '%' }}
-              />
-            </div>
-            <p className="bm-phase-label" style={{ textAlign: 'right', marginTop: 4 }}>
-              {progress.done} / {progress.total}
-            </p>
-          </div>
-        )}
-
-        {phase === 'done' && result && (() => {
-          const B = result.baseline;
-          const P = result.peningkatan;
-          const reduction = v => ((1 - v) * 100).toFixed(1) + '%';
-          return (
-            <>
-              <div className="bm-speedup">
-                🚀 Peningkatan <b>{result.speedup.toFixed(2)}×</b> lebih cepat
-                <span className="bm-speedup-sub">
-                  (rata-rata {f(B.total.mean)} ms → {f(P.total.mean)} ms)
-                </span>
-              </div>
-
-              {/* ── Tabel utama ── */}
-              <div className="bm-table-wrap">
-                <table className="bm-table">
-                  <thead>
-                    <tr>
-                      <th>Metrik</th>
-                      <th>Baseline</th>
-                      <th>Peningkatan</th>
-                      <th>Penurunan</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[
-                      ['Mean', B.total.mean, P.total.mean],
-                      ['Median', B.total.median, P.total.median],
-                      ['Min', B.total.min, P.total.min],
-                      ['Max', B.total.max, P.total.max],
-                      ['Std Dev', B.total.stddev, P.total.stddev],
-                    ].map(([label, bv, pv]) => (
-                      <tr key={label}>
-                        <td>{label}</td>
-                        <td className="bm-num">{f(bv)} ms</td>
-                        <td className="bm-num bm-green">{f(pv)} ms</td>
-                        <td className="bm-num bm-green">
-                          {label !== 'Std Dev' ? reduction(pv / bv) : '—'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-
-                {/* ── Sub-breakdown Matriks vs TSP ── */}
-                <div className="bm-sub-head">Breakdown: Matriks Jarak</div>
-                <table className="bm-table">
-                  <thead>
-                    <tr><th></th><th>Baseline (Naif)</th><th>Peningkatan (Batch)</th><th>Penurunan</th></tr>
-                  </thead>
-                  <tbody>
-                    {[['Mean', B.matrix.mean, P.matrix.mean], ['Median', B.matrix.median, P.matrix.median]].map(([l, bv, pv]) => (
-                      <tr key={l}><td>{l}</td><td className="bm-num">{f(bv)} ms</td><td className="bm-num bm-green">{f(pv)} ms</td><td className="bm-num bm-green">{reduction(pv / bv)}</td></tr>
-                    ))}
-                  </tbody>
-                </table>
-
-                <div className="bm-sub-head">Breakdown: TSP Solver</div>
-                <table className="bm-table">
-                  <thead>
-                    <tr><th></th><th>Baseline (Brute Force)</th><th>Peningkatan (Held-Karp)</th><th>Penurunan</th></tr>
-                  </thead>
-                  <tbody>
-                    {[['Mean', B.tsp.mean, P.tsp.mean], ['Median', B.tsp.median, P.tsp.median]].map(([l, bv, pv]) => (
-                      <tr key={l}><td>{l}</td><td className="bm-num">{f(bv)} ms</td><td className="bm-num bm-green">{f(pv)} ms</td><td className="bm-num bm-green">{reduction(pv / bv)}</td></tr>
-                    ))}
-                  </tbody>
-                </table>
-
-                {/* ── Log per-run ── */}
-                <div className="bm-sub-head">Log Per-Run (Total ms)</div>
-                <div className="bm-log-wrap">
-                  <table className="bm-table">
-                    <thead>
-                      <tr><th>#</th><th>Baseline</th><th>Peningkatan</th></tr>
-                    </thead>
-                    <tbody>
-                      {B.total.runs.map((bv, i) => (
-                        <tr key={i}>
-                          <td style={{ color: 'var(--mute)' }}>{i + 1}</td>
-                          <td className="bm-num">{f(bv)}</td>
-                          <td className="bm-num bm-green">{f(P.total.runs[i])}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className="bm-actions">
-                <button className="bm-act-btn" onClick={copyMd}>
-                  {copied ? '✓ Tersalin!' : '📋 Salin Tabel Markdown'}
-                </button>
-                <button className="bm-act-btn" onClick={downloadCsv}>
-                  ⬇ Unduh CSV
-                </button>
-                <button className="bm-act-btn bm-act-secondary" onClick={start}>
-                  🔄 Ulangi
-                </button>
-              </div>
-            </>
-          );
-        })()}
-      </div>
-    </div>
-  );
-}
-
 export default function App() {
   const [roads, setRoads] = useState(null);
   const [data, setData] = useState(null);
   const [fileData, setFileData] = useState(null);
-  const [scenario, setScenario] = useState('s1'); // 's1' = 5 sekolah | 's2' = 10 sekolah
+  const [scenario, setScenario] = useState('s1'); // 's1' = 1 sekolah | 's2' = 4 sekolah | 's3' = 10 sekolah
   const [objective, setObjective] = useState('dist');
   const [showNaive, setShowNaive] = useState(true);
   const [active, setActive] = useState(null);
@@ -654,28 +443,26 @@ export default function App() {
   const [blockages, setBlockages] = useState([]);
   const [mapMode, setMapMode] = useState('none'); // 'none' | 'blockage' | 'school' | 'kitchen'
   const [blockNote, setBlockNote] = useState('');
-  const [mode, setMode] = useState('normal'); // 'normal' | 'pre' | 'post'
+  const [mode, setMode] = useState('normal'); // 'normal' | 'pre'
   const [runNoncePre, setRunNoncePre] = useState(0);
-  const [runNoncePost, setRunNoncePost] = useState(0);
-  const [snaps, setSnaps] = useState({ pre: null, post: null }); // hasil simulasi per mode
-  const [dijkTargets, setDijkTargets] = useState(null); // null = pakai 3 sekolah pertama pada rute
+  const [dijkTargets, setDijkTargets] = useState(null); // null = pakai seluruh sekolah pada rute
   const [dijkStep, setDijkStep] = useState(0);
-  const [showBenchmark, setShowBenchmark] = useState(false);
 
-  const [scenarioFiles, setScenarioFiles] = useState({ s1: null, s2: null });
+  const [scenarioFiles, setScenarioFiles] = useState({ s1: null, s2: null, s3: null });
 
   useEffect(() => {
     Promise.all([
+      fetch('/data/data-1school.json').then(r => r.json()),
       fetch('/data/data.json').then(r => r.json()),
       fetch('/data/data-10schools.json').then(r => r.json()),
       fetch('/data/roads.json').then(r => r.json()),
-    ]).then(([file1, file2, roadsJson]) => {
+    ]).then(([file1, file2, file3, roadsJson]) => {
       let saved = null;
       try {
         saved = JSON.parse(localStorage.getItem(STORE_KEY));
       } catch (e) { }
-      const ok = saved && saved.kitchen && Array.isArray(saved.schools) && saved.schools.length === 4;
-      setScenarioFiles({ s1: file1, s2: file2 });
+      const ok = saved && saved.kitchen && Array.isArray(saved.schools) && saved.schools.length === 1;
+      setScenarioFiles({ s1: file1, s2: file2, s3: file3 });
       setFileData(file1);
       setData(ok ? saved : file1);
       setRoads(roadsJson);
@@ -693,8 +480,6 @@ export default function App() {
     setActive(null);
     setMode('normal');
     setRunNoncePre(0);
-    setRunNoncePost(0);
-    setSnaps({ pre: null, post: null });
   };
 
   // Graph jalan: dihitung sekali
@@ -718,35 +503,23 @@ export default function App() {
 
   // Rute Baseline: Dijkstra Naif (Pairwise 1 per 1) + Brute Force O((N-1)!)
   const planPre = useMemo(
-    () => (base ? solve(base, blockages, 'pre') : null),
+    () => (base ? solve(base, blockages) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [base, blockages, runNoncePre]
   );
 
-  // Rute Peningkatan: Dijkstra Batch Scan + Dynamic Programming Held-Karp O(N² · 2ᴺ)
-  const planPost = useMemo(
-    () => (base ? solve(base, blockages, 'post') : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [base, blockages, runNoncePost]
-  );
-
-  const handleSelectMode = targetMode => {
-    setMode(targetMode);
-    if (targetMode === 'pre') {
-      setRunNoncePre(n => n + 1);
-    } else {
-      setRunNoncePost(n => n + 1);
-    }
+  const handleSelectBaseline = () => {
+    setMode('pre');
+    setRunNoncePre(n => n + 1);
     setReplay(r => r + 1);
   };
 
-  // Rute aktif sesuai pilihan mode ('pre' | 'post' | 'normal')
-  const plan = mode === 'pre' ? planPre : planPost;
+  const plan = planPre;
 
   // Baseline tanpa blokade
   const baseline = useMemo(
-    () => (base ? solve(base, [], mode === 'pre' ? 'pre' : 'post') : null),
-    [base, mode]
+    () => (base ? solve(base, []) : null),
+    [base]
   );
 
   const current = plan ? plan.result[objective] : null;
@@ -764,10 +537,6 @@ export default function App() {
     () => (base ? applyBlockages(base.g.adj, base.g.coords, blockages) : null),
     [base, blockages]
   );
-  const revAdjNow = useMemo(
-    () => (adjNow ? buildReverseAdj(adjNow) : null),
-    [adjNow]
-  );
 
   // Ukuran graph (setelah blokade): V simpul, E ruas berarah
   const graphStats = useMemo(() => {
@@ -777,7 +546,7 @@ export default function App() {
     return { V: adjNow.size, E };
   }, [adjNow]);
 
-  // Visualisasi pencarian simpul sesuai mode yang dipilih
+  // Visualisasi pencarian simpul Dijkstra (Pairwise 1 per 1 sesuai baseline)
   const viz = useMemo(() => {
     if (mode === 'normal' || !base || !adjNow) return null;
     const valid = targets.filter(t => t > 0 && t < base.nodes.length);
@@ -786,101 +555,23 @@ export default function App() {
     const toNodes = valid.map(t => base.nodes[t]);
     const co = id => base.g.coords.get(id);
 
-    if (mode === 'pre') {
-      // Baseline: Menjalankan pencarian satu arah terpisah satu per satu
-      const D = toNodes.map(to => dijkstraTrace(adjNow, from, [to], objective));
-      const routes = D.map((t, k) => ({
-        place: valid[k],
-        found: t.results[0].found,
-        cost: t.results[0].cost,
-        latlngs: t.results[0].path.map(id => [co(id).lat, co(id).lon]),
-      }));
-      const pts = routes.flatMap(r => r.latlngs);
-      return {
-        routes,
-        bounds: pts.length ? pts : [[base.places[0].lat, base.places[0].lng]],
-        orderCoords: D.flatMap(t => t.order).map(co),
-        parentCoords: D.flatMap(t => t.parent).map(p => (p === null ? null : co(p))),
-        color: '#f97316',
-        stats: sumStats(D.map(t => t.stats)),
-      };
-    } else {
-      // Peningkatan (Modifikasi Opsi B): Multi-Target Batch Scan Sekali Jalan
-      const t = dijkstraTrace(adjNow, from, toNodes, objective);
-      const routes = t.results.map((r, k) => ({
-        place: valid[k],
-        found: r.found,
-        cost: r.cost,
-        latlngs: r.path.map(id => [co(id).lat, co(id).lon]),
-      }));
-      const pts = routes.flatMap(r => r.latlngs);
-      return {
-        routes,
-        bounds: pts.length ? pts : [[base.places[0].lat, base.places[0].lng]],
-        orderCoords: t.order.map(co),
-        parentCoords: t.parent.map(p => (p === null ? null : co(p))),
-        color: '#06b6d4',
-        stats: t.stats,
-      };
-    }
-  }, [mode, base, adjNow, targets, objective]);
-
-  // Perbandingan untuk tujuan yang sama (Dijkstra Naif Satu per Satu vs Multi-Target Batch Scan)
-  const compare = useMemo(() => {
-    if (mode === 'normal' || !base || !adjNow) return null;
-    const valid = targets.filter(t => t > 0 && t < base.nodes.length);
-    if (!valid.length) return null;
-    const from = base.nodes[0];
-    const toNodes = valid.map(t => base.nodes[t]);
-
-    // D = Dijkstra dijalankan terpisah satu per satu untuk tiap tujuan (Baseline)
     const D = toNodes.map(to => dijkstraTrace(adjNow, from, [to], objective));
-    // S = Multi-Target Batch Scan sekali jalan untuk semua tujuan sekaligus (Peningkatan)
-    const S = dijkstraTrace(adjNow, from, toNodes, objective);
-
-    const bench = fn => {
-      fn();
-      const RUNS = 10;
-      const t0 = performance.now();
-      for (let i = 0; i < RUNS; i++) fn();
-      return (performance.now() - t0) / RUNS;
-    };
-    const msD = bench(() => toNodes.forEach(to => dijkstra(adjNow, from, objective, [to])));
-    const msS = bench(() => dijkstra(adjNow, from, objective, toNodes));
-
+    const routes = D.map((t, k) => ({
+      place: valid[k],
+      found: t.results[0].found,
+      cost: t.results[0].cost,
+      latlngs: t.results[0].path.map(id => [co(id).lat, co(id).lon]),
+    }));
+    const pts = routes.flatMap(r => r.latlngs);
     return {
-      visitedD: D.reduce((sum, r) => sum + r.order.length, 0),
-      visitedS: S.order.length,
-      msD,
-      msS,
+      routes,
+      bounds: pts.length ? pts : [[base.places[0].lat, base.places[0].lng]],
+      orderCoords: D.flatMap(t => t.order).map(co),
+      parentCoords: D.flatMap(t => t.parent).map(p => (p === null ? null : co(p))),
+      color: mode === 'pre' ? '#f97316' : '#06b6d4',
+      stats: sumStats(D.map(t => t.stats)),
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, base, adjNow, targets, objective, runNoncePre, runNoncePost]);
-
-  // Hasil simulasi disimpan per mode, dan hanya berlaku untuk kondisi yang sama
-  const condKey = JSON.stringify([objective, targets, blockages.map(b => b.id), geoKey]);
-  useEffect(() => {
-    if (!compare) return;
-    if (mode === 'pre') {
-      setSnaps(sn => ({
-        ...sn,
-        pre: {
-          key: condKey,
-          visitedD: compare.visitedD,
-          msD: compare.msD,
-        },
-      }));
-    } else if (mode === 'post') {
-      setSnaps(sn => ({
-        ...sn,
-        post: {
-          key: condKey,
-          visitedS: compare.visitedS,
-          msS: compare.msS,
-        },
-      }));
-    }
-  }, [compare, mode, condKey]);
+  }, [mode, base, adjNow, targets, objective]);
 
   // Animasi pencarian
   useEffect(() => {
@@ -1041,23 +732,36 @@ export default function App() {
             <button
               className={'scenario-btn' + (scenario === 's1' ? ' on' : '')}
               onClick={() => handleScenario('s1')}
-              title="Skenario 1: 4 sekolah (N=5) — skala kecil"
+              title="Skenario 1: 1 sekolah (N=2) — kasus basis tunggal"
             >
               Skenario 1<br />
-              <span>4 Sekolah · N=5</span>
+              <span>1 Sekolah · N=2</span>
             </button>
             <button
               className={'scenario-btn' + (scenario === 's2' ? ' on' : '')}
               onClick={() => handleScenario('s2')}
-              title="Skenario 2: 10 sekolah (N=11) — memperlihatkan keunggulan Held-Karp vs Brute Force"
+              title="Skenario 2: 4 sekolah (N=5) — skala kecil"
             >
               Skenario 2<br />
+              <span>4 Sekolah · N=5</span>
+            </button>
+            <button
+              className={'scenario-btn' + (scenario === 's3' ? ' on' : '')}
+              onClick={() => handleScenario('s3')}
+              title="Skenario 3: 10 sekolah (N=11) — skala penuh (3,6 juta permutasi)"
+            >
+              Skenario 3<br />
               <span>10 Sekolah · N=11</span>
             </button>
           </div>
-          {scenario === 's2' && (
+          {scenario === 's1' && (
             <p className="note" style={{ marginTop: 6, color: '#38bdf8', fontSize: 11 }}>
-              💡 Skenario skala penuh: Evaluasi 10! = 3.628.800 permutasi Brute Force vs Held-Karp DP.
+              💡 Kasus basis (Single Target): 1 sekolah saja (1! = 1 rute), rute langsung pulang-pergi tanpa optimasi permutasi.
+            </p>
+          )}
+          {scenario === 's3' && (
+            <p className="note" style={{ marginTop: 6, color: '#38bdf8', fontSize: 11 }}>
+              💡 Skenario skala penuh: Evaluasi 10! = 3.628.800 permutasi Brute Force.
             </p>
           )}
         </header>
@@ -1066,38 +770,21 @@ export default function App() {
           <div className="dj-row">
             <button
               className={'dj-btn' + (mode === 'pre' ? ' on' : '')}
-              onClick={() => handleSelectMode('pre')}
+              onClick={handleSelectBaseline}
               title="Baseline: Dijkstra Naif (Pairwise 1 per 1) + Brute Force TSP"
             >
               Baseline
             </button>
-            <button
-              className={'dj-btn' + (mode === 'post' ? ' on' : '')}
-              onClick={() => handleSelectMode('post')}
-              title="Peningkatan: Multi-Target Batch Scan + Dynamic Programming Held-Karp"
-            >
-              Peningkatan
-            </button>
             {mode !== 'normal' && (
               <span className="dj-ms">
-                <b>{(mode === 'pre' ? planPre?.result[objective]?.stats.totalTime : planPost?.result[objective]?.stats.totalTime)?.toFixed(2)}</b> ms
+                <b>{planPre?.result[objective]?.stats.totalTime?.toFixed(2)}</b> ms
               </span>
             )}
           </div>
           <p className="note" style={{ margin: '0 0 10px', fontSize: 11 }}>
-            {mode === 'pre' && `Metode: Baseline (Dijkstra Naif Pairwise 1 per 1 + Brute Force TSP 𝒪((N-1)!) = ${(places.length - 1)}! permutasi)`}
-            {mode === 'post' && 'Metode: Peningkatan (Multi-Target Batch Scan + Dynamic Programming Held-Karp 𝒪(N² · 2ᴺ))'}
-            {mode === 'normal' && 'Pilih mode algoritma untuk menampilkan rute & perbandingan.'}
+            {mode === 'pre' && `Metode: Baseline (Dijkstra Naif Pairwise + Brute Force TSP 𝒪((N-1)!) = ${(places.length - 1)}! permutasi)`}
+            {mode === 'normal' && 'Klik Baseline untuk menjalankan simulasi pencarian & rute.'}
           </p>
-          {base && (
-            <button
-              className="bm-trigger-btn"
-              onClick={() => setShowBenchmark(true)}
-              title="Jalankan benchmark otomatis 20× per algoritma"
-            >
-              📊 Benchmark Otomatis (20×)
-            </button>
-          )}
           {mode !== 'normal' && viz && (
             <div className="dj-info">
               <span className="lbl">Tujuan (boleh lebih dari satu)</span>
@@ -1117,8 +804,7 @@ export default function App() {
                 })}
               </div>
               <p className="note">
-                {viz.orderCoords.length.toLocaleString('id-ID')} simpul dikunjungi untuk {targets.length} tujuan
-                {mode === 'pre' ? ' (dicari terpisah satu per satu / naif)' : ' (dicari sekaligus dalam 1 sapuan gelombang)'}.
+                {viz.orderCoords.length.toLocaleString('id-ID')} simpul dikunjungi untuk {targets.length} tujuan (Dijkstra Pairwise satu per satu).
               </p>
             </div>
           )}
@@ -1327,7 +1013,7 @@ export default function App() {
                     <Polyline key={'l' + k} positions={p.points} pathOptions={{ color: p.color, weight: 5 }} />
                   ))}
                   <CarMarker
-                    key={replay + '|' + mode + '|' + objective + '|' + (mode === 'pre' ? runNoncePre : runNoncePost)}
+                    key={replay + '|' + mode + '|' + objective + '|' + runNoncePre}
                     routes={current?.legs?.map(pts => ({ found: true, latlngs: pts })) || []}
                   />
                 </>
@@ -1369,11 +1055,11 @@ export default function App() {
       <aside className="side-right">
         <div className="side-card">
           <div className="dock-head">
-            <b>Perbandingan Kompleksitas</b>
+            <b>Profil Kompleksitas (Baseline)</b>
             <span>{objective === 'dist' ? 'Jarak' : 'Waktu'}</span>
           </div>
           <p className="note" style={{ margin: '0 0 8px' }}>
-            Evaluasi modifikasi algoritma graf & optimasi rute MBG:
+            Evaluasi algoritma standar sebelum optimasi:
           </p>
           <div className="dock-row head">
             <span />
@@ -1389,91 +1075,31 @@ export default function App() {
             <span>{planPre ? num(planPre.result[objective].stats.visited) : 0}</span>
             <span>{planPre ? planPre.result[objective].stats.totalTime.toFixed(2) + ' ms' : '0.00'}</span>
           </div>
-          <div className="dock-row">
-            <span>
-              <b>Peningkatan</b>
-              <br />
-              <small style={{ color: 'var(--mute)', fontSize: 10 }}>Batch Scan (Multi-Target) + Held-Karp DP</small>
-            </span>
-            <span>{planPost ? num(planPost.result[objective].stats.visited) : 0}</span>
-            <span>{planPost ? planPost.result[objective].stats.totalTime.toFixed(2) + ' ms' : '0.00'}</span>
-          </div>
-          <p className="dock-note">
-            {planPre && planPost ? (
-              <>
-                {(() => {
-                  const preV = planPre.result[objective].stats.visited;
-                  const postV = planPost.result[objective].stats.visited;
-                  const preCost = planPre.result[objective].cost;
-                  const postCost = planPost.result[objective].cost;
-                  const costGap = preCost > 0 ? (postCost - preCost) / preCost : 0;
-                  return (
-                    <>
-                      • <b>Simpul Traversal:</b> Berkurang <b>{reduction(postV, preV)}</b> karena sapuan gelombang multi-target mengeliminasi pemindaian berulang di jalan sekitar dapur.
-                      <br />
-                      • <b>Frekuensi Eksekusi:</b> Dipangkas dari <b>N(N-1) kali</b> menjadi cukup <b>N kali</b> pemanggilan graf.
-                      <br />
-                      • <b>Optimasi TSP:</b> Dynamic Programming memangkas ordo dari <b>𝒪((N-1)!)</b> ke <b>𝒪(N² · 2ᴺ)</b>.
-                      <br />
-                      • <b>Optimalitas:</b> {costGap < 1e-9 ? 'Kedua metode menghasilkan jarak rute 100% identik optimal.' : 'Jarak rute optimal terkonfirmasi.'}
-                    </>
-                  );
-                })()}
-              </>
-            ) : (
-              'Pilih Baseline atau Peningkatan untuk melihat perbandingan.'
-            )}
-          </p>
-        </div>
-
-        <div className="side-card" style={{ marginTop: 12 }}>
-          <div className="dock-head">
-            <b>Rincian Modifikasi Algoritma</b>
-          </div>
-          <div className="ex-box" style={{ marginTop: 6 }}>
-            <div className="ex-row">
-              <span><b>Komponen</b></span>
-              <span><b>Baseline → Peningkatan</b></span>
-            </div>
+          <div className="ex-box" style={{ marginTop: 10 }}>
             <div className="ex-row">
               <span>Shortest Path</span>
-              <span>Dijkstra Naif (Pairwise) → Multi-Target Batch Scan</span>
+              <span>Dijkstra Naif (Pairwise)</span>
             </div>
             <div className="ex-row">
-              <span>Frekuensi Pencarian</span>
-              <span>N(N-1) kali → N kali (Hemat 75%+)</span>
+              <span>Frekuensi Scan</span>
+              <span>{places.length}×{places.length - 1} = {places.length * (places.length - 1)} kali</span>
             </div>
             <div className="ex-row">
-              <span>Penanganan Target</span>
-              <span>1 per 1 (Redundan) → Sekaligus (Early Stopping)</span>
+              <span>Waktu Matriks</span>
+              <span>{planPre ? planPre.result[objective].stats.matrixTime.toFixed(2) + ' ms' : '0.00 ms'}</span>
             </div>
             <div className="ex-row">
-              <span>Penentu Urutan</span>
-              <span>Brute Force → Held-Karp DP</span>
+              <span>TSP Solver</span>
+              <span>Brute Force 𝒪((N-1)!)</span>
             </div>
             <div className="ex-row">
-              <span>Kompleksitas TSP</span>
-              <span>𝒪((N-1)!) → 𝒪(N² · 2ᴺ)</span>
+              <span>Waktu TSP</span>
+              <span>{planPre ? planPre.result[objective].stats.tspTime.toFixed(2) + ' ms' : '0.00 ms'}</span>
             </div>
           </div>
-          <p className="note" style={{ marginTop: 8, lineHeight: 1.5 }}>
-            <b>Keunggulan Ilmiah Modifikasi:</b>
-            <br />
-            1. <b>Multi-Target Batch Scan (Zero-Trace Overhead):</b> Memanfaatkan sifat alami <i>Single-Source Shortest Path (SSSP)</i>. Dari satu titik asal, satu gelombang ekspansi memantau seluruh sekolah tujuan secara simultan dan berhenti seketika (<i>Early Stopping</i>) dengan komputasi numerik murni tanpa membebani alokasi memori animasi.
-            <br />
-            2. <b>Held-Karp Dynamic Programming:</b> Memanfaatkan relasi rekurensi Bellman dengan representasi <i>bitmask</i>, menjamin rute global optimal tanpa harus menguji jutaan permutasi faktorial.
-          </p>
         </div>
       </aside>
     </div>
-    {showBenchmark && base && (
-      <BenchmarkModal
-        base={base}
-        blockages={blockages}
-        objective={objective}
-        onClose={() => setShowBenchmark(false)}
-      />
-    )}
     </>
   );
 }

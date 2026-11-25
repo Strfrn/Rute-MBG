@@ -5,7 +5,7 @@
 // (tanpa rendering peta / animasi), lalu menghitung statistik.
 // ============================================================
 
-import { buildMatrixNaiveDijkstra, buildMatrixBatchDijkstra } from './matrix.js';
+import { buildMatrixNaiveDijkstra } from './matrix.js';
 import { bruteForce, heldKarp } from './route.js';
 import { applyBlockages } from './blockage.js';
 
@@ -63,10 +63,10 @@ export async function runBenchmark(base, blockages, weightKey = 'dist', runs = 2
     return { matrixTime, tspTime, total: matrixTime + tspTime };
   }
 
-  // --- helper: satu run peningkatan (Batch Scan + Held-Karp) ---
+  // --- helper: satu run peningkatan (Dijkstra Naif + Held-Karp) ---
   function runPeningkatan() {
     const t0 = performance.now();
-    const matrixRes = buildMatrixBatchDijkstra(adj, nodes, weightKey);
+    const matrixRes = buildMatrixNaiveDijkstra(adj, nodes, weightKey);
     const matrixTime = performance.now() - t0;
     const full = matrixRes.matrix;
 
@@ -162,13 +162,6 @@ export function toMarkdownTable(result) {
     `| Std Dev | ${f(B.total.stddev)} ms | ${f(P.total.stddev)} ms | - |`,
     ``,
     `**Faktor Percepatan (Speedup):** ${speedup.toFixed(2)}× lebih cepat`,
-    ``,
-    `### Waktu Pembentukan Matriks Jarak`,
-    ``,
-    `| Metrik | Baseline (Naif Pairwise) | Peningkatan (Batch Scan) |`,
-    `|--------|--------------------------|--------------------------|`,
-    `| Mean   | ${f(B.matrix.mean)} ms | ${f(P.matrix.mean)} ms |`,
-    `| Median | ${f(B.matrix.median)} ms | ${f(P.matrix.median)} ms |`,
     ``,
     `### Waktu TSP Solver`,
     ``,

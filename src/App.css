@@ -3,12 +3,12 @@
 ═══════════════════════════════════════════════════════════════ */
 .scenario-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
   margin-top: 10px;
 }
 .scenario-btn {
-  padding: 7px 6px;
+  padding: 6px 4px;
   background: var(--well);
   border: 1px solid var(--line);
   border-radius: 8px;
